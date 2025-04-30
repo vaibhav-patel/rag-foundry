@@ -1,0 +1,12 @@
+# Tooling configuration only (install deps per-package: infra/, services/, cli/).
+[tool.ruff]
+line-length = 100
+target-version = "py39"
+src = ["services/control_plane", "infra", "cli", "packages/contracts", "scripts"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.pytest.ini_options]
+testpaths = ["services/control_plane/tests", "infra/tests", "cli/tests"]
+pythonpath = ["services/control_plane/lambda"]

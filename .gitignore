@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+*.egg
+
+# CDK
+cdk.out/
+*.swp
+.DS_Store
+
+# Node / web
+web/node_modules/
+web/dist/
+web/.env
+web/.env.*
+
+# Env
+.env
+.env.*
+!.env.example
+
+# IDE
+.idea/
+.vscode/
+
+# Coverage
+htmlcov/
+.coverage
+
+# OS
+Thumbs.db

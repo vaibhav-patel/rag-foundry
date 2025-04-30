@@ -1,0 +1,28 @@
+openapi: 3.0.3
+info:
+  title: rag-foundry Control Plane
+  version: 0.1.0
+paths:
+  /v1/health:
+    get:
+      summary: Health check
+      responses:
+        "200":
+          description: OK
+  /v1/kbs:
+    get:
+      summary: List knowledge bases
+      security: [{ bearerAuth: [] }]
+    post:
+      summary: Create knowledge base
+      security: [{ bearerAuth: [] }]
+  /v1/kbs/{kbId}/query:
+    post:
+      summary: RAG query
+      security: [{ bearerAuth: [] }]
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
