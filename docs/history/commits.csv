@@ -1,2 +1,3 @@
 step_id,iso_date,branch,message
-1,2025-05-01T12:00:00Z,feat/0001-initial-scaffold,Initial rag-foundry monorepo scaffold
+1,2025-04-30T12:00:00Z,main,Initial rag-foundry monorepo scaffold (see root commit message on main)
+2,2025-05-02T12:00:00Z,main,feat: complete plan todo pass — worker extract, search stub, dashboard, CLI, history tooling

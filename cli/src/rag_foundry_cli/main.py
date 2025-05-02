@@ -34,6 +34,24 @@ def kb_list() -> None:
         typer.echo(r.text)
 
 
+@app.command("kb-create")
+def kb_create(name: str = typer.Argument(..., help="Knowledge base display name")) -> None:
+    """POST /v1/kbs"""
+    with _client() as c:
+        r = c.post("/v1/kbs", json={"name": name})
+        r.raise_for_status()
+        typer.echo(r.text)
+
+
+@app.command("job-create")
+def job_create(kb_id: str = typer.Argument(..., help="Knowledge base id")) -> None:
+    """POST /v1/kbs/{kbId}/jobs"""
+    with _client() as c:
+        r = c.post(f"/v1/kbs/{kb_id}/jobs", json={})
+        r.raise_for_status()
+        typer.echo(r.text)
+
+
 def main() -> None:
     app()
 

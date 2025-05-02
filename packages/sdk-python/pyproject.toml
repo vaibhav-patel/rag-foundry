@@ -1,0 +1,14 @@
+[project]
+name = "rag-foundry-sdk-python"
+version = "0.1.0"
+requires-python = ">=3.9"
+description = "Thin helpers for plugin authors (stubs expanded later)."
+readme = "README.md"
+dependencies = []
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

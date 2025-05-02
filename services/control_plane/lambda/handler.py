@@ -10,6 +10,8 @@ from typing import Any
 
 import boto3
 
+import vector_stub
+
 _region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1"
 ddb_client = boto3.client("dynamodb", region_name=_region)
 s3_client = boto3.client("s3", region_name=_region)
@@ -171,12 +173,32 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 )
         return _json_response(404, {"title": "Not found", "detail": "Job not found"})
 
+    m_search = re.fullmatch(r"/v1/kbs/([^/]+)/search", path)
+    if m_search and method == "POST":
+        kb_id = m_search.group(1)
+        body = json.loads(event.get("body") or "{}")
+        g = ddb_client.get_item(
+            TableName=table,
+            Key={"PK": {"S": f"TENANT#{tenant}"}, "SK": {"S": f"KB#{kb_id}"}},
+        )
+        if "Item" not in g or g["Item"].get("GSI1SK", {}).get("S") != f"TENANT#{tenant}":
+            return _json_response(403, {"title": "Forbidden", "detail": "Invalid KB"})
+        qtext = str(body.get("q", ""))
+        hits = vector_stub.dense_search_stub(
+            endpoint=os.environ.get("OPENSEARCH_ENDPOINT", ""),
+            collection_name=os.environ.get("OPENSEARCH_COLLECTION_NAME", ""),
+            query_text=qtext,
+            top_k=int(body.get("top_k", 5)),
+        )
+        return _json_response(200, {"kb_id": kb_id, **hits})
+
     m_query = re.fullmatch(r"/v1/kbs/([^/]+)/query", path)
     if m_query and method == "POST":
         kb_id = m_query.group(1)
         body = json.loads(event.get("body") or "{}")
         question = body.get("question", "")
-        br = boto3.client("bedrock-runtime", region_name=os.environ.get("AWS_REGION"))
+        guardrails_id = body.get("guardrails_id") or os.environ.get("BEDROCK_GUARDRAILS_ID", "")
+        br = boto3.client("bedrock-runtime", region_name=_region)
         model_id = body.get("model_id", "anthropic.claude-3-haiku-20240307-v1:0")
         try:
             payload = {
@@ -189,12 +211,16 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                     }
                 ],
             }
-            resp = br.invoke_model(
-                modelId=model_id,
-                body=json.dumps(payload).encode("utf-8"),
-                contentType="application/json",
-                accept="application/json",
-            )
+            invoke_kw: dict[str, Any] = {
+                "modelId": model_id,
+                "body": json.dumps(payload).encode("utf-8"),
+                "contentType": "application/json",
+                "accept": "application/json",
+            }
+            if guardrails_id:
+                invoke_kw["guardrailIdentifier"] = guardrails_id
+                invoke_kw["guardrailVersion"] = str(body.get("guardrails_version", "DRAFT"))
+            resp = br.invoke_model(**invoke_kw)
             out = json.loads(resp["body"].read().decode("utf-8"))
             text = ""
             for block in out.get("content", []):
@@ -209,9 +235,18 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 "SK": {"S": f"AUDIT#QUERY#{uuid.uuid4()}"},
                 "kb_id": {"S": kb_id},
                 "question": {"S": question[:2000]},
+                **({"guardrails_id": {"S": str(guardrails_id)[:256]}} if guardrails_id else {}),
             },
         )
-        return _json_response(200, {"answer": text, "citations": [], "kb_id": kb_id})
+        return _json_response(
+            200,
+            {
+                "answer": text,
+                "citations": [],
+                "kb_id": kb_id,
+                "guardrails_applied": bool(guardrails_id),
+            },
+        )
 
     if path == "/v1/plugins/manifest" and method == "POST":
         body = json.loads(event.get("body") or "{}")

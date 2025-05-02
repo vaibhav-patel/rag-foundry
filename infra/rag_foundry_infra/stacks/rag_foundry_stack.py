@@ -119,6 +119,12 @@ class RagFoundryStack(Stack):
             supported_identity_providers=[cognito.UserPoolClientIdentityProvider.COGNITO],
         )
 
+        api_logs = logs.LogGroup(
+            self,
+            "ControlPlaneLogs",
+            retention=logs.RetentionDays.TWO_WEEKS,
+            removal_policy=RemovalPolicy.DESTROY,
+        )
         api_lambda = lambda_.Function(
             self,
             "ControlPlaneFn",
@@ -133,12 +139,18 @@ class RagFoundryStack(Stack):
                 "ARTIFACTS_BUCKET": artifacts_bucket.bucket_name,
                 "BUILD_VERSION": "0.1.0",
             },
-            log_retention=logs.RetentionDays.TWO_WEEKS,
+            log_group=api_logs,
         )
         table.grant_read_write_data(api_lambda)
         raw_bucket.grant_read_write(api_lambda)
         artifacts_bucket.grant_read_write(api_lambda)
 
+        worker_logs = logs.LogGroup(
+            self,
+            "WorkerLogs",
+            retention=logs.RetentionDays.TWO_WEEKS,
+            removal_policy=RemovalPolicy.DESTROY,
+        )
         worker_lambda = lambda_.Function(
             self,
             "WorkerFn",
@@ -151,6 +163,7 @@ class RagFoundryStack(Stack):
                 "RAW_BUCKET": raw_bucket.bucket_name,
                 "TABLE_NAME": table.table_name,
             },
+            log_group=worker_logs,
         )
         raw_bucket.grant_read_write(worker_lambda)
         table.grant_read_write_data(worker_lambda)
@@ -331,3 +344,28 @@ class RagFoundryStack(Stack):
             alarm_description="Ingest DLQ has messages",
         )
         alarm.add_alarm_action(cw_actions.SnsAction(ops_topic))
+
+        dashboard = cw.Dashboard(
+            self,
+            "RagFoundryDashboard",
+            dashboard_name="rag-foundry-dev",
+        )
+        dashboard.add_widgets(
+            cw.TextWidget(markdown="# rag-foundry\nControl plane and worker Lambda invocations / errors."),
+            cw.GraphWidget(
+                title="Lambda invocations",
+                left=[
+                    api_lambda.metric_invocations(),
+                    worker_lambda.metric_invocations(),
+                ],
+                width=12,
+            ),
+            cw.GraphWidget(
+                title="Lambda errors",
+                left=[
+                    api_lambda.metric_errors(),
+                    worker_lambda.metric_errors(),
+                ],
+                width=12,
+            ),
+        )

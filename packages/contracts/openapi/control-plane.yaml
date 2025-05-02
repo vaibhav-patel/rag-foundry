@@ -18,7 +18,27 @@ paths:
       security: [{ bearerAuth: [] }]
   /v1/kbs/{kbId}/query:
     post:
-      summary: RAG query
+      summary: RAG query (Bedrock generation + audit)
+      security: [{ bearerAuth: [] }]
+  /v1/kbs/{kbId}/search:
+    post:
+      summary: Dense / hybrid search (OpenSearch Serverless stub)
+      security: [{ bearerAuth: [] }]
+  /v1/kbs/{kbId}/uploads:
+    post:
+      summary: Presigned PUT for raw document
+      security: [{ bearerAuth: [] }]
+  /v1/kbs/{kbId}/jobs:
+    post:
+      summary: Start ingest job (Step Functions)
+      security: [{ bearerAuth: [] }]
+  /v1/jobs/{jobId}:
+    get:
+      summary: Poll job status
+      security: [{ bearerAuth: [] }]
+  /v1/plugins/manifest:
+    post:
+      summary: Register plugin manifest
       security: [{ bearerAuth: [] }]
 components:
   securitySchemes:
