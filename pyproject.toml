@@ -8,5 +8,5 @@ src = ["services/control_plane", "infra", "cli", "packages/contracts", "scripts"
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.pytest.ini_options]
-testpaths = ["services/control_plane/tests", "infra/tests", "cli/tests"]
+testpaths = ["services/control_plane/tests", "services/workers/tests", "infra/tests", "cli/tests", "packages/contracts/tests", "packages/sdk-python/tests"]
 pythonpath = ["services/control_plane/lambda"]
