@@ -169,19 +169,14 @@ class RagFoundryStack(Stack):
         table.grant_read_write_data(worker_lambda)
 
         validate = sfn.Pass(self, "ValidateInput")
-        extract = tasks.LambdaInvoke(
+        ingest = tasks.LambdaInvoke(
             self,
-            "ExtractText",
+            "IngestWorker",
             lambda_function=worker_lambda,
             payload_response_only=True,
         )
-        chunk = sfn.Pass(self, "Chunk")
-        embed = sfn.Pass(self, "Embed")
-        index = sfn.Pass(self, "Index")
         finalize = sfn.Pass(self, "Finalize")
-        definition = (
-            validate.next(extract).next(chunk).next(embed).next(index).next(finalize)
-        )
+        definition = validate.next(ingest).next(finalize)
         state_machine = sfn.StateMachine(
             self,
             "IngestPipeline",
@@ -287,6 +282,15 @@ class RagFoundryStack(Stack):
                     resources=[f"arn:aws:aoss:{self.region}:{self.account}:collection/{collection_name}"],
                 )
             )
+        worker_lambda.add_to_role_policy(
+            iam.PolicyStatement(
+                actions=["bedrock:InvokeModel"],
+                resources=[
+                    f"arn:aws:bedrock:{self.region}::foundation-model/amazon.titan-embed-text-v1",
+                    f"arn:aws:bedrock:{self.region}::foundation-model/amazon.titan-embed-text-v2:0",
+                ],
+            )
+        )
 
         jwt_authorizer = apigwv2_auth.HttpJwtAuthorizer(
             "JwtAuthorizer",
