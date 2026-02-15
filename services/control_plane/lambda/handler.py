@@ -134,6 +134,20 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         kb_id = m_jobs.group(1)
         if not sm_arn:
             return _json_response(501, {"title": "Not configured", "detail": "STATE_MACHINE_ARN missing"})
+        body = json.loads(event.get("body") or "{}")
+        s3_key = str(body.get("s3_key", "")).strip()
+        if not s3_key:
+            return _json_response(
+                400,
+                {"title": "Bad Request", "detail": "s3_key required (use POST /v1/kbs/{id}/uploads then pass returned key)"},
+            )
+        g = ddb_client.get_item(
+            TableName=table,
+            Key={"PK": {"S": f"TENANT#{tenant}"}, "SK": {"S": f"KB#{kb_id}"}},
+        )
+        if "Item" not in g or g["Item"].get("GSI1SK", {}).get("S") != f"TENANT#{tenant}":
+            return _json_response(403, {"title": "Forbidden", "detail": "Invalid KB"})
+        emb = g["Item"].get("embedding_model_id", {}).get("S", "amazon.titan-embed-text-v1")
         job_id = str(uuid.uuid4())
         ddb_client.put_item(
             TableName=table,
@@ -146,12 +160,20 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 "status": {"S": "QUEUED"},
             },
         )
+        payload = {
+            "tenant": tenant,
+            "kb_id": kb_id,
+            "job_id": job_id,
+            "s3_key": s3_key,
+            "embedding_model_id": body.get("embedding_model_id") or emb,
+            "chunk_chars": int(body.get("chunk_chars", 1200)),
+        }
         sfn_client.start_execution(
             stateMachineArn=sm_arn,
             name=job_id[:80],
-            input=json.dumps({"tenant": tenant, "kb_id": kb_id, "job_id": job_id}),
+            input=json.dumps(payload),
         )
-        return _json_response(202, {"id": job_id, "status": "QUEUED"})
+        return _json_response(202, {"id": job_id, "status": "QUEUED", "s3_key": s3_key})
 
     m_job = re.fullmatch(r"/v1/jobs/([^/]+)", path)
     if m_job and method == "GET":
