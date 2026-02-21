@@ -35,6 +35,7 @@ jobs:
           pip install -e "infra/[dev]"
           pip install -e "services/control_plane/[dev]"
           pip install -e "packages/contracts"
+          pip install -e "packages/sdk-python"
           pip install -e "cli/[dev]"
       - name: Pytest
         run: pytest -q
@@ -59,4 +60,4 @@ jobs:
         env:
           CDK_DEFAULT_ACCOUNT: "000000000000"
           CDK_DEFAULT_REGION: us-east-1
-        run: cd infra && cdk synth -q
+        run: cd infra && python3 app.py
