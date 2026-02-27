@@ -44,10 +44,13 @@ def kb_create(name: str = typer.Argument(..., help="Knowledge base display name"
 
 
 @app.command("job-create")
-def job_create(kb_id: str = typer.Argument(..., help="Knowledge base id")) -> None:
-    """POST /v1/kbs/{kbId}/jobs"""
+def job_create(
+    kb_id: str = typer.Argument(..., help="Knowledge base id"),
+    s3_key: str = typer.Option(..., "--s3-key", help="Raw object key from POST .../uploads"),
+) -> None:
+    """POST /v1/kbs/{kbId}/jobs (requires s3_key from presigned upload)."""
     with _client() as c:
-        r = c.post(f"/v1/kbs/{kb_id}/jobs", json={})
+        r = c.post(f"/v1/kbs/{kb_id}/jobs", json={"s3_key": s3_key})
         r.raise_for_status()
         typer.echo(r.text)
 
