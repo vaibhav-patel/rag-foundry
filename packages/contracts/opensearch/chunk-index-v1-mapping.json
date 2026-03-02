@@ -1,0 +1,31 @@
+{
+  "settings": {
+    "index": {
+      "knn": true,
+      "knn.algo_param.ef_construction": 128,
+      "knn.algo_param.ef_search": 128,
+      "number_of_shards": "2",
+      "number_of_replicas": "0"
+    }
+  },
+  "mappings": {
+    "properties": {
+      "tenant_id": { "type": "keyword" },
+      "kb_id": { "type": "keyword" },
+      "job_id": { "type": "keyword" },
+      "chunk_id": { "type": "keyword" },
+      "source_s3_key": { "type": "keyword" },
+      "chunk_text": { "type": "text" },
+      "metadata": { "type": "object", "enabled": true },
+      "embedding": {
+        "type": "knn_vector",
+        "dimension": 1536,
+        "method": {
+          "name": "hnsw",
+          "space_type": "l2",
+          "engine": "nmslib"
+        }
+      }
+    }
+  }
+}
