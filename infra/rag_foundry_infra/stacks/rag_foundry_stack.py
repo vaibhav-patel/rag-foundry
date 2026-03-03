@@ -236,24 +236,34 @@ class RagFoundryStack(Stack):
         collection.add_dependency(enc_policy)
         collection.add_dependency(net_policy)
 
+        index_data_perms = [
+            "aoss:CreateIndex",
+            "aoss:DeleteIndex",
+            "aoss:UpdateIndex",
+            "aoss:DescribeIndex",
+            "aoss:ReadDocument",
+            "aoss:WriteDocument",
+        ]
+        collection_meta_perms = [
+            "aoss:DescribeCollectionItems",
+        ]
         data_policy_doc = [
             {
                 "Rules": [
                     {
                         "ResourceType": "index",
                         "Resource": [f"index/{collection_name}/*"],
-                        "Permission": ["aoss:*"],
+                        "Permission": index_data_perms,
                     },
                     {
                         "ResourceType": "collection",
                         "Resource": [f"collection/{collection_name}"],
-                        "Permission": ["aoss:*"],
+                        "Permission": collection_meta_perms,
                     },
                 ],
                 "Principal": [
                     api_lambda.role.role_arn,
                     worker_lambda.role.role_arn,
-                    f"arn:aws:iam::{self.account}:root",
                 ],
             }
         ]
@@ -266,20 +276,32 @@ class RagFoundryStack(Stack):
         )
         data_policy.add_dependency(collection)
 
+        index_name_default = "rag-foundry-chunks"
         api_lambda.add_environment("OPENSEARCH_COLLECTION_NAME", collection_name)
         worker_lambda.add_environment("OPENSEARCH_COLLECTION_NAME", collection_name)
+        api_lambda.add_environment("OPENSEARCH_INDEX_NAME", index_name_default)
+        worker_lambda.add_environment("OPENSEARCH_INDEX_NAME", index_name_default)
         collection_endpoint = collection.attr_collection_endpoint
         api_lambda.add_environment("OPENSEARCH_ENDPOINT", collection_endpoint)
         worker_lambda.add_environment("OPENSEARCH_ENDPOINT", collection_endpoint)
 
-        # OpenSearch Serverless permissions for Lambdas (runtime uses SigV4 against collection endpoint).
+        # OpenSearch Serverless — identity policy (HTTP data plane) scoped to this collection + indices.
+        aoss_collection_arn = f"arn:aws:aoss:{self.region}:{self.account}:collection/{collection_name}"
+        aoss_index_arn = f"arn:aws:aoss:{self.region}:{self.account}:index/{collection_name}/*"
+        aoss_data_actions = [
+            "aoss:ReadDocument",
+            "aoss:WriteDocument",
+            "aoss:CreateIndex",
+            "aoss:UpdateIndex",
+            "aoss:DeleteIndex",
+            "aoss:DescribeIndex",
+            "aoss:DescribeCollectionItems",
+        ]
         for fn in (api_lambda, worker_lambda):
             fn.add_to_role_policy(
                 iam.PolicyStatement(
-                    actions=[
-                        "aoss:APIAccessAll",
-                    ],
-                    resources=[f"arn:aws:aoss:{self.region}:{self.account}:collection/{collection_name}"],
+                    actions=aoss_data_actions,
+                    resources=[aoss_collection_arn, aoss_index_arn],
                 )
             )
         worker_lambda.add_to_role_policy(
@@ -334,6 +356,9 @@ class RagFoundryStack(Stack):
         CfnOutput(self, "UserPoolClientId", value=app_client.user_pool_client_id)
         CfnOutput(self, "CollectionName", value=collection_name)
         CfnOutput(self, "CollectionEndpoint", value=collection_endpoint)
+        CfnOutput(self, "OpensearchChunkIndexName", value=index_name_default)
+        CfnOutput(self, "AossDataAccessPolicyName", value=data_policy.name)
+        CfnOutput(self, "AossIndexResourcePattern", value=f"index/{collection_name}/*")
 
         # DLQ alarm stub (metric on state machine or SQS - simple queue depth)
         from aws_cdk import aws_cloudwatch as cw
