@@ -20,7 +20,9 @@ def fixed_char_chunks(text: str, max_chars: int, overlap: int) -> list[str]:
     return out or [""]
 
 
-def recursive_char_chunks(text: str, max_chars: int, separators: tuple[str, ...] = ("\n\n", "\n", ". ", " ")) -> list[str]:
+def recursive_char_chunks(
+    text: str, max_chars: int, separators: tuple[str, ...] = ("\n\n", "\n", ". ", " ")
+) -> list[str]:
     """Split on largest separator first, then recurse until pieces fit max_chars."""
 
     def split_piece(s: str) -> list[str]:

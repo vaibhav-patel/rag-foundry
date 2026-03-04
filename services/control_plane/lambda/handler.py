@@ -9,7 +9,6 @@ import uuid
 from typing import Any
 
 import boto3
-
 import vector_stub
 
 _region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1"
@@ -70,7 +69,9 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 "GSI1PK": {"S": f"KB#{kb_id}"},
                 "GSI1SK": {"S": f"TENANT#{tenant}"},
                 "name": {"S": body.get("name", "kb")},
-                "embedding_model_id": {"S": body.get("embedding_model_id", "amazon.titan-embed-text-v1")},
+                "embedding_model_id": {
+                    "S": body.get("embedding_model_id", "amazon.titan-embed-text-v1")
+                },
             },
         )
         return _json_response(201, {"id": kb_id, "tenant_id": tenant})
@@ -88,7 +89,9 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         for it in q.get("Items", []):
             sk = it["SK"]["S"]
             if sk.startswith("KB#"):
-                items.append({"id": sk.removeprefix("KB#"), "name": it.get("name", {}).get("S", "")})
+                items.append(
+                    {"id": sk.removeprefix("KB#"), "name": it.get("name", {}).get("S", "")}
+                )
         return _json_response(200, {"items": items})
 
     if m_kb and method == "GET":
@@ -133,13 +136,20 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     if m_jobs and method == "POST":
         kb_id = m_jobs.group(1)
         if not sm_arn:
-            return _json_response(501, {"title": "Not configured", "detail": "STATE_MACHINE_ARN missing"})
+            return _json_response(
+                501, {"title": "Not configured", "detail": "STATE_MACHINE_ARN missing"}
+            )
         body = json.loads(event.get("body") or "{}")
         s3_key = str(body.get("s3_key", "")).strip()
         if not s3_key:
             return _json_response(
                 400,
-                {"title": "Bad Request", "detail": "s3_key required (use POST /v1/kbs/{id}/uploads then pass returned key)"},
+                {
+                    "title": "Bad Request",
+                    "detail": (
+                        "s3_key required (use POST /v1/kbs/{id}/uploads then pass returned key)"
+                    ),
+                },
             )
         g = ddb_client.get_item(
             TableName=table,
@@ -229,7 +239,9 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 "messages": [
                     {
                         "role": "user",
-                        "content": [{"type": "text", "text": f"Context: (stub). Question: {question}"}],
+                        "content": [
+                            {"type": "text", "text": f"Context: (stub). Question: {question}"}
+                        ],
                     }
                 ],
             }
@@ -284,4 +296,3 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         return _json_response(201, {"ok": True})
 
     return _json_response(404, {"title": "Not found", "path": path, "method": method})
-

@@ -2,7 +2,11 @@
 name = "rag-foundry-control-plane"
 version = "0.1.0"
 requires-python = ">=3.9"
-dependencies = ["boto3>=1.35.0"]
+dependencies = [
+    "boto3>=1.35.0",
+    "opensearch-py>=2.6.0,<4",
+    "requests-aws4auth>=1.2.3",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0.0", "moto[s3,dynamodb,stepfunctions,bedrock-runtime]>=5.0.0"]

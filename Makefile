@@ -5,11 +5,11 @@ install:
 	python3 -m pip install -e "infra/[dev]" -e "services/control_plane/[dev]" -e "packages/contracts" -e "cli/[dev]"
 
 fmt:
-	ruff format services/control_plane infra cli packages/contracts packages/sdk-python scripts
-	ruff check --fix services/control_plane infra cli packages/contracts packages/sdk-python scripts
+	ruff format services/control_plane services/workers/lambda_stub infra cli packages/contracts packages/sdk-python scripts
+	ruff check --fix services/control_plane services/workers/lambda_stub infra cli packages/contracts packages/sdk-python scripts
 
 lint:
-	ruff check services/control_plane infra cli packages/contracts packages/sdk-python scripts
+	ruff check services/control_plane services/workers/lambda_stub infra cli packages/contracts packages/sdk-python scripts
 
 test:
 	pytest -q

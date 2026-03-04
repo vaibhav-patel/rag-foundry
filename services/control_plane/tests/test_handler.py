@@ -5,8 +5,6 @@ from __future__ import annotations
 import json
 import os
 
-import pytest
-
 os.environ.setdefault("TABLE_NAME", "t")
 os.environ.setdefault("RAW_BUCKET", "b")
 os.environ.setdefault("ARTIFACTS_BUCKET", "a")
@@ -24,7 +22,9 @@ spec.loader.exec_module(mod)
 
 
 def test_health():
-    out = mod.handler({"rawPath": "/v1/health", "requestContext": {"http": {"method": "GET"}}}, None)
+    out = mod.handler(
+        {"rawPath": "/v1/health", "requestContext": {"http": {"method": "GET"}}}, None
+    )
     assert out["statusCode"] == 200
     body = json.loads(out["body"])
     assert body["status"] == "ok"
@@ -34,7 +34,10 @@ def test_not_found():
     out = mod.handler(
         {
             "rawPath": "/v1/unknown",
-            "requestContext": {"http": {"method": "GET"}, "authorizer": {"jwt": {"claims": {"sub": "u1"}}}},
+            "requestContext": {
+                "http": {"method": "GET"},
+                "authorizer": {"jwt": {"claims": {"sub": "u1"}}},
+            },
         },
         None,
     )

@@ -1,4 +1,4 @@
-"""Ingest worker: extract from S3, chunk, embed (Bedrock or stub), write derived manifest, update job status."""
+"""Ingest worker: S3 extract, chunk, embed, manifest, job status (Bedrock or stub)."""
 
 from __future__ import annotations
 
@@ -28,7 +28,7 @@ def _embed_stub(text: str, dim: int = 64) -> list[float]:
     h = hashlib.sha256(text.encode("utf-8", errors="replace")).digest()
     vec: list[float] = []
     for i in range(dim):
-        vec.append((((((h[i % len(h)] + i) % 255) / 255.0) - 0.5) * 0.02))
+        vec.append((((h[i % len(h)] + i) % 255) / 255.0 - 0.5) * 0.02)
     return vec
 
 

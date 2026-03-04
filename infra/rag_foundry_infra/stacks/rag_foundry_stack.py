@@ -1,13 +1,13 @@
-"""Core rag-foundry infrastructure: network, data, auth, API, ingest pipeline, OpenSearch Serverless."""
+"""Core rag-foundry infrastructure: VPC, data stores, auth, HTTP API, ingest, OpenSearch."""
 
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
-
 from aws_cdk import (
+    BundlingOptions,
     CfnOutput,
     Duration,
     RemovalPolicy,
@@ -32,6 +32,37 @@ from aws_cdk import aws_stepfunctions as sfn
 from aws_cdk import aws_stepfunctions_tasks as tasks
 from constructs import Construct
 
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+
+
+def _bundled_lambda_code(repo_root: Path, rel_lambda_dir: str) -> lambda_.Code:
+    """Install requirements.txt alongside *.py into the Lambda asset (Docker bundling).
+
+    Set ``RAG_FOUNDRY_SYNTH_SKIP_LAMBDA_BUNDLING=1`` to stage source only (e.g. infra unit tests
+    without Docker). Production synth must leave this unset.
+    """
+    asset_path = repo_root / rel_lambda_dir
+    path_str = str(asset_path)
+    skip = os.environ.get("RAG_FOUNDRY_SYNTH_SKIP_LAMBDA_BUNDLING", "").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    if skip:
+        return lambda_.Code.from_asset(path_str)
+    return lambda_.Code.from_asset(
+        path_str,
+        bundling=BundlingOptions(
+            image=lambda_.Runtime.PYTHON_3_12.bundling_image,
+            command=[
+                "bash",
+                "-c",
+                "pip install --no-cache-dir -r requirements.txt -t /asset-output "
+                "&& cp -v ./*.py /asset-output/",
+            ],
+        ),
+    )
+
 
 class RagFoundryStack(Stack):
     def __init__(self, scope: Construct, construct_id: str, **kwargs) -> None:
@@ -43,7 +74,11 @@ class RagFoundryStack(Stack):
             max_azs=2,
             nat_gateways=1,
             subnet_configuration=[
-                ec2.SubnetConfiguration(name="Public", subnet_type=ec2.SubnetType.PUBLIC, cidr_mask=24),
+                ec2.SubnetConfiguration(
+                    name="Public",
+                    subnet_type=ec2.SubnetType.PUBLIC,
+                    cidr_mask=24,
+                ),
                 ec2.SubnetConfiguration(
                     name="Private",
                     subnet_type=ec2.SubnetType.PRIVATE_WITH_EGRESS,
@@ -112,7 +147,11 @@ class RagFoundryStack(Stack):
             auth_flows=cognito.AuthFlow(user_password=True, user_srp=True),
             o_auth=cognito.OAuthSettings(
                 flows=cognito.OAuthFlows(authorization_code_grant=True),
-                scopes=[cognito.OAuthScope.OPENID, cognito.OAuthScope.EMAIL, cognito.OAuthScope.PROFILE],
+                scopes=[
+                    cognito.OAuthScope.OPENID,
+                    cognito.OAuthScope.EMAIL,
+                    cognito.OAuthScope.PROFILE,
+                ],
                 callback_urls=["http://localhost:5173/callback"],
                 logout_urls=["http://localhost:5173/"],
             ),
@@ -130,7 +169,7 @@ class RagFoundryStack(Stack):
             "ControlPlaneFn",
             runtime=lambda_.Runtime.PYTHON_3_12,  # Lambda runtime (not local Python version)
             handler="handler.handler",
-            code=lambda_.Code.from_asset(str(_REPO_ROOT / "services/control_plane/lambda")),
+            code=_bundled_lambda_code(_REPO_ROOT, "services/control_plane/lambda"),
             timeout=Duration.seconds(29),
             memory_size=512,
             environment={
@@ -156,7 +195,7 @@ class RagFoundryStack(Stack):
             "WorkerFn",
             runtime=lambda_.Runtime.PYTHON_3_12,
             handler="handler.handler",
-            code=lambda_.Code.from_asset(str(_REPO_ROOT / "services/workers/lambda_stub")),
+            code=_bundled_lambda_code(_REPO_ROOT, "services/workers/lambda_stub"),
             timeout=Duration.minutes(5),
             memory_size=1024,
             environment={
@@ -267,10 +306,11 @@ class RagFoundryStack(Stack):
                 ],
             }
         ]
+        data_policy_name = f"{collection_name}-data"
         data_policy = aoss.CfnAccessPolicy(
             self,
             "DataAccessPolicy",
-            name=f"{collection_name}-data",
+            name=data_policy_name,
             type="data",
             policy=json.dumps(data_policy_doc, separators=(",", ":")),
         )
@@ -285,9 +325,11 @@ class RagFoundryStack(Stack):
         api_lambda.add_environment("OPENSEARCH_ENDPOINT", collection_endpoint)
         worker_lambda.add_environment("OPENSEARCH_ENDPOINT", collection_endpoint)
 
-        # OpenSearch Serverless — identity policy (HTTP data plane) scoped to this collection + indices.
-        aoss_collection_arn = f"arn:aws:aoss:{self.region}:{self.account}:collection/{collection_name}"
-        aoss_index_arn = f"arn:aws:aoss:{self.region}:{self.account}:index/{collection_name}/*"
+        # OpenSearch Serverless: identity HTTP data-plane policy for this collection + indices.
+        account = self.account
+        region = self.region
+        aoss_collection_arn = f"arn:aws:aoss:{region}:{account}:collection/{collection_name}"
+        aoss_index_arn = f"arn:aws:aoss:{region}:{account}:index/{collection_name}/*"
         aoss_data_actions = [
             "aoss:ReadDocument",
             "aoss:WriteDocument",
@@ -357,7 +399,7 @@ class RagFoundryStack(Stack):
         CfnOutput(self, "CollectionName", value=collection_name)
         CfnOutput(self, "CollectionEndpoint", value=collection_endpoint)
         CfnOutput(self, "OpensearchChunkIndexName", value=index_name_default)
-        CfnOutput(self, "AossDataAccessPolicyName", value=data_policy.name)
+        CfnOutput(self, "AossDataAccessPolicyName", value=data_policy_name)
         CfnOutput(self, "AossIndexResourcePattern", value=f"index/{collection_name}/*")
 
         # DLQ alarm stub (metric on state machine or SQS - simple queue depth)
@@ -380,7 +422,9 @@ class RagFoundryStack(Stack):
             dashboard_name="rag-foundry-dev",
         )
         dashboard.add_widgets(
-            cw.TextWidget(markdown="# rag-foundry\nControl plane and worker Lambda invocations / errors."),
+            cw.TextWidget(
+                markdown="# rag-foundry\nControl plane and worker Lambda invocations / errors.",
+            ),
             cw.GraphWidget(
                 title="Lambda invocations",
                 left=[

@@ -19,9 +19,9 @@ jobs:
       - name: Install tooling
         run: pip install ruff pytest
       - name: Ruff
-        run: ruff check services/control_plane infra cli packages/contracts packages/sdk-python scripts
+        run: ruff check services/control_plane services/workers/lambda_stub infra cli packages/contracts packages/sdk-python scripts
       - name: Format check
-        run: ruff format --check services/control_plane infra cli packages/contracts packages/sdk-python scripts
+        run: ruff format --check services/control_plane services/workers/lambda_stub infra cli packages/contracts packages/sdk-python scripts
 
   test:
     runs-on: ubuntu-latest
