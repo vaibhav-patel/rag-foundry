@@ -58,7 +58,8 @@ def _bundled_lambda_code(repo_root: Path, rel_lambda_dir: str) -> lambda_.Code:
                 "bash",
                 "-c",
                 "pip install --no-cache-dir -r requirements.txt -t /asset-output "
-                "&& cp -v ./*.py /asset-output/",
+                "&& cp -v ./*.py /asset-output/ "
+                '&& for f in ./*.json; do [ -f "$f" ] && cp -v "$f" /asset-output/; done',
             ],
         ),
     )

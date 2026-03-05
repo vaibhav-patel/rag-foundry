@@ -5,5 +5,6 @@ COPY lambda_stub/requirements.txt ${LAMBDA_TASK_ROOT}/requirements.txt
 RUN pip install --no-cache-dir -r ${LAMBDA_TASK_ROOT}/requirements.txt --target "${LAMBDA_TASK_ROOT}"
 
 COPY lambda_stub/*.py ${LAMBDA_TASK_ROOT}/
+COPY lambda_stub/*.json ${LAMBDA_TASK_ROOT}/
 
 CMD ["handler.handler"]

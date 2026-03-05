@@ -10,6 +10,8 @@ from typing import Any
 import boto3
 
 import chunking
+from ensure_chunk_index import ensure_chunk_index
+from opensearch_client import create_opensearch_client
 
 _region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1"
 s3 = boto3.client("s3", region_name=_region)
@@ -62,6 +64,8 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
     if not key or not bucket:
         return {"ok": False, "error": "missing s3_key or RAW_BUCKET"}
+
+    ensure_chunk_index(create_opensearch_client())
 
     text = _extract_text(bucket, key)
     chunks = chunking.recursive_char_chunks(text, max_chars=int(event.get("chunk_chars", 1200)))
