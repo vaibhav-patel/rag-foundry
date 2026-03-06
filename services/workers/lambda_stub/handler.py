@@ -10,6 +10,7 @@ from typing import Any
 import boto3
 
 import chunking
+from chunk_bulk_document import ChunkBulkDocument
 from ensure_chunk_index import ensure_chunk_index
 from opensearch_client import create_opensearch_client
 
@@ -69,12 +70,24 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
     text = _extract_text(bucket, key)
     chunks = chunking.recursive_char_chunks(text, max_chars=int(event.get("chunk_chars", 1200)))
-    vectors: list[list[float]] = []
-    for ch in chunks[:200]:
+    bulk_docs: list[ChunkBulkDocument] = []
+    for i, ch in enumerate(chunks[:200]):
         v: list[float] | None = None
         if embed_model.startswith("amazon.titan-embed"):
             v = _embed_bedrock(ch, embed_model)
-        vectors.append(v if v is not None else _embed_stub(ch))
+        vec = v if v is not None else _embed_stub(ch)
+        bulk_docs.append(
+            ChunkBulkDocument(
+                tenant=tenant,
+                kb_id=kb_id,
+                job_id=job_id,
+                chunk_idx=i,
+                s3_key=key,
+                chunk_text=ch,
+                embedding=vec,
+                metadata=None,
+            )
+        )
 
     manifest = {
         "tenant": tenant,
@@ -84,6 +97,8 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         "chunk_count": len(chunks),
         "embedding_model": embed_model,
         "chunks_preview": [c[:200] for c in chunks[:5]],
+        "first_chunk_document_id": bulk_docs[0].document_id() if bulk_docs else None,
+        "bulk_schema": "chunk-v1",
     }
     out_key = f"derived/{tenant}/{kb_id}/{job_id}/manifest.json"
     s3.put_object(
