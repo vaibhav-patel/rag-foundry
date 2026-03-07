@@ -215,6 +215,7 @@ class RagFoundryStack(Stack):
             lambda_function=worker_lambda,
             payload_response_only=True,
         )
+        # Finalize echoes ingest Lambda output (job_status, bulk_*, errors) as execution result.
         finalize = sfn.Pass(self, "Finalize")
         definition = validate.next(ingest).next(finalize)
         state_machine = sfn.StateMachine(
@@ -325,6 +326,7 @@ class RagFoundryStack(Stack):
         collection_endpoint = collection.attr_collection_endpoint
         api_lambda.add_environment("OPENSEARCH_ENDPOINT", collection_endpoint)
         worker_lambda.add_environment("OPENSEARCH_ENDPOINT", collection_endpoint)
+        worker_lambda.add_environment("BULK_BATCH_SIZE", "50")
 
         # OpenSearch Serverless: identity HTTP data-plane policy for this collection + indices.
         account = self.account

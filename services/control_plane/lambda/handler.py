@@ -167,6 +167,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 "GSI1PK": {"S": "JOB#RUNNING"},
                 "GSI1SK": {"S": f"TENANT#{tenant}#{job_id}"},
                 "tenant": {"S": tenant},
+                "kb_id": {"S": kb_id},
                 "status": {"S": "QUEUED"},
             },
         )
@@ -199,10 +200,23 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         )
         for it in q.get("Items", []):
             if it["SK"]["S"] == f"JOB#{job_id}" and it.get("tenant", {}).get("S") == tenant:
-                return _json_response(
-                    200,
-                    {"id": job_id, "status": it.get("status", {}).get("S", "UNKNOWN")},
-                )
+                st = it.get("status", {}).get("S", "UNKNOWN")
+                body: dict[str, Any] = {
+                    "id": job_id,
+                    "status": st,
+                    "kb_id": it.get("kb_id", {}).get("S"),
+                    "manifest_key": it.get("manifest_key", {}).get("S"),
+                    "bulk_indexed": int(it.get("bulk_indexed", {}).get("N", "0")),
+                    "bulk_failed": int(it.get("bulk_failed", {}).get("N", "0")),
+                    "errors": [],
+                }
+                err_raw = it.get("ingest_errors", {}).get("S")
+                if err_raw:
+                    try:
+                        body["errors"] = json.loads(err_raw)
+                    except json.JSONDecodeError:
+                        body["errors"] = []
+                return _json_response(200, body)
         return _json_response(404, {"title": "Not found", "detail": "Job not found"})
 
     m_search = re.fullmatch(r"/v1/kbs/([^/]+)/search", path)
