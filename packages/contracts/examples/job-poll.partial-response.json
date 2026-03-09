@@ -1,0 +1,9 @@
+{
+  "id": "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d",
+  "status": "PARTIAL",
+  "kb_id": "kb-notes",
+  "manifest_key": "derived/tenant-1/kb-notes/9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d/manifest.json",
+  "bulk_indexed": 98,
+  "bulk_failed": 2,
+  "errors": ["a94a8fe5ccb19ba61c4c0873d391e987982fbbd3ff24a764d7e7c6c7c97cfdc6"]
+}

@@ -10,6 +10,12 @@ from typing import Any
 
 import boto3
 import vector_stub
+from job_status import (
+    JOB_GSI1_PARTITION_PK,
+    JOB_STATUS_QUEUE,
+    gsi_sort_key_for_tenant_job,
+    job_item_to_api_body,
+)
 
 _region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1"
 ddb_client = boto3.client("dynamodb", region_name=_region)
@@ -164,11 +170,11 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             Item={
                 "PK": {"S": f"KB#{kb_id}"},
                 "SK": {"S": f"JOB#{job_id}"},
-                "GSI1PK": {"S": "JOB#RUNNING"},
-                "GSI1SK": {"S": f"TENANT#{tenant}#{job_id}"},
+                "GSI1PK": {"S": JOB_GSI1_PARTITION_PK},
+                "GSI1SK": {"S": gsi_sort_key_for_tenant_job(tenant=tenant, job_id=job_id)},
                 "tenant": {"S": tenant},
                 "kb_id": {"S": kb_id},
-                "status": {"S": "QUEUED"},
+                "status": {"S": JOB_STATUS_QUEUE},
             },
         )
         payload = {
@@ -184,7 +190,25 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             name=job_id[:80],
             input=json.dumps(payload),
         )
-        return _json_response(202, {"id": job_id, "status": "QUEUED", "s3_key": s3_key})
+        return _json_response(202, {"id": job_id, "status": JOB_STATUS_QUEUE, "s3_key": s3_key})
+
+    m_kb_job = re.fullmatch(r"/v1/kbs/([^/]+)/jobs/([^/]+)", path)
+    if m_kb_job and method == "GET":
+        kb_id_job = m_kb_job.group(1)
+        job_id_kb = m_kb_job.group(2)
+        gjob = ddb_client.get_item(
+            TableName=table,
+            Key={
+                "PK": {"S": f"KB#{kb_id_job}"},
+                "SK": {"S": f"JOB#{job_id_kb}"},
+            },
+        )
+        if "Item" not in gjob:
+            return _json_response(404, {"title": "Not found", "detail": "Job not found"})
+        itj = gjob["Item"]
+        if itj.get("tenant", {}).get("S") != tenant:
+            return _json_response(403, {"title": "Forbidden", "detail": "Invalid job"})
+        return _json_response(200, job_item_to_api_body(job_id_kb, itj))
 
     m_job = re.fullmatch(r"/v1/jobs/([^/]+)", path)
     if m_job and method == "GET":
@@ -192,31 +216,35 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         q = ddb_client.query(
             TableName=table,
             IndexName="GSI1",
-            KeyConditionExpression="GSI1PK = :pk AND begins_with(GSI1SK, :sk)",
+            KeyConditionExpression="GSI1PK = :pk AND GSI1SK = :sk",
             ExpressionAttributeValues={
-                ":pk": {"S": "JOB#RUNNING"},
-                ":sk": {"S": f"TENANT#{tenant}#"},
+                ":pk": {"S": JOB_GSI1_PARTITION_PK},
+                ":sk": {"S": gsi_sort_key_for_tenant_job(tenant=tenant, job_id=job_id)},
             },
         )
-        for it in q.get("Items", []):
+        items = q.get("Items") or []
+        picked: dict[str, Any] | None = None
+        for it in items:
             if it["SK"]["S"] == f"JOB#{job_id}" and it.get("tenant", {}).get("S") == tenant:
-                st = it.get("status", {}).get("S", "UNKNOWN")
-                body: dict[str, Any] = {
-                    "id": job_id,
-                    "status": st,
-                    "kb_id": it.get("kb_id", {}).get("S"),
-                    "manifest_key": it.get("manifest_key", {}).get("S"),
-                    "bulk_indexed": int(it.get("bulk_indexed", {}).get("N", "0")),
-                    "bulk_failed": int(it.get("bulk_failed", {}).get("N", "0")),
-                    "errors": [],
-                }
-                err_raw = it.get("ingest_errors", {}).get("S")
-                if err_raw:
-                    try:
-                        body["errors"] = json.loads(err_raw)
-                    except json.JSONDecodeError:
-                        body["errors"] = []
-                return _json_response(200, body)
+                picked = it
+                break
+        if not picked and items:
+            # Legacy safety: malformed GSI1SK — fall back to prefix scan (migration / bad rows).
+            q2 = ddb_client.query(
+                TableName=table,
+                IndexName="GSI1",
+                KeyConditionExpression="GSI1PK = :pk AND begins_with(GSI1SK, :sk)",
+                ExpressionAttributeValues={
+                    ":pk": {"S": JOB_GSI1_PARTITION_PK},
+                    ":sk": {"S": f"TENANT#{tenant}#"},
+                },
+            )
+            for it in q2.get("Items", []) or []:
+                if it["SK"]["S"] == f"JOB#{job_id}" and it.get("tenant", {}).get("S") == tenant:
+                    picked = it
+                    break
+        if picked:
+            return _json_response(200, job_item_to_api_body(job_id, picked))
         return _json_response(404, {"title": "Not found", "detail": "Job not found"})
 
     m_search = re.fullmatch(r"/v1/kbs/([^/]+)/search", path)

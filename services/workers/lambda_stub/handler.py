@@ -20,6 +20,18 @@ s3 = boto3.client("s3", region_name=_region)
 ddb = boto3.client("dynamodb", region_name=_region)
 
 
+def _set_job_status_runtime(*, table: str, kb_id: str, job_id: str, status: str) -> None:
+    if not (table and kb_id and job_id):
+        return
+    ddb.update_item(
+        TableName=table,
+        Key={"PK": {"S": f"KB#{kb_id}"}, "SK": {"S": f"JOB#{job_id}"}},
+        UpdateExpression="SET #s = :st",
+        ExpressionAttributeNames={"#s": "status"},
+        ExpressionAttributeValues={":st": {"S": status}},
+    )
+
+
 def _extract_text(bucket: str, key: str, max_bytes: int = 512_000) -> str:
     obj = s3.get_object(Bucket=bucket, Key=key)
     body = obj["Body"].read(max_bytes)
@@ -68,6 +80,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         return {"ok": False, "error": "missing s3_key or RAW_BUCKET"}
 
     ensure_chunk_index(create_opensearch_client())
+    _set_job_status_runtime(table=table, kb_id=kb_id, job_id=job_id, status="RUNNING")
 
     text = _extract_text(bucket, key)
     chunks = chunking.recursive_char_chunks(text, max_chars=int(event.get("chunk_chars", 1200)))

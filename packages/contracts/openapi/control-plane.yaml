@@ -32,15 +32,174 @@ paths:
     post:
       summary: Start ingest job (Step Functions)
       security: [{ bearerAuth: [] }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                s3_key:
+                  type: string
+                  description: Object key returned from uploads
+                embedding_model_id:
+                  type: string
+                chunk_chars:
+                  type: integer
+      responses:
+        "202":
+          description: Job accepted (QUEUED); poll GET job until terminal state
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngestJobCreated"
+              example:
+                id: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+                status: QUEUED
+                s3_key: "tenant/kb/raw/doc.txt"
+        "501":
+          description: Pipeline not configured
+  /v1/kbs/{kbId}/jobs/{jobId}:
+    get:
+      summary: Poll job status (primary; PK=`KB#{kbId}`, SK=`JOB#{jobId}`)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: kbId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Current job snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobPollResponse"
+              examples:
+                succeeded:
+                  $ref: "#/components/examples/jobPollSucceeded"
+                partial:
+                  $ref: "#/components/examples/jobPollPartial"
+                running:
+                  $ref: "#/components/examples/jobRunning"
+        "403":
+          description: Job not visible to tenant
+        "404":
+          description: Job missing
   /v1/jobs/{jobId}:
     get:
-      summary: Poll job status
+      summary: Poll job status (legacy tenant+job GSI lookup; prefer `/v1/kbs/{kbId}/jobs/{jobId}`)
       security: [{ bearerAuth: [] }]
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Current job snapshot
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobPollResponse"
+              examples:
+                succeeded:
+                  $ref: "#/components/examples/jobPollSucceeded"
+                partial:
+                  $ref: "#/components/examples/jobPollPartial"
+        "404":
+          description: Job missing
   /v1/plugins/manifest:
     post:
       summary: Register plugin manifest
       security: [{ bearerAuth: [] }]
 components:
+  schemas:
+    JobStatus:
+      $ref: "../schemas/job-status.schema.json"
+    JobPollResponse:
+      type: object
+      description: Mirrors DynamoDB ingest job projection after worker updates
+      required: [id, status, bulk_indexed, bulk_failed, errors]
+      properties:
+        id:
+          type: string
+          format: uuid
+        status:
+          $ref: "#/components/schemas/JobStatus"
+        kb_id:
+          type: string
+          nullable: true
+        manifest_key:
+          type: string
+          nullable: true
+        bulk_indexed:
+          type: integer
+          minimum: 0
+        bulk_failed:
+          type: integer
+          minimum: 0
+        errors:
+          type: array
+          description: OpenSearch bulk failure document `_id`s (subset may be persisted)
+          items:
+            type: string
+    IngestJobCreated:
+      type: object
+      required: [id, status]
+      properties:
+        id:
+          type: string
+        status:
+          type: string
+          enum: [QUEUED]
+          description: Initial status when POST returns 202 (`JobStatus`; see schema)
+        s3_key:
+          type: string
+  examples:
+    jobPollSucceeded:
+      summary: SUCCEEDED ingest
+      value:
+        id: "3fa85f64-5717-4562-b3fc-2c963f66afa6"
+        status: SUCCEEDED
+        kb_id: "kb-orders"
+        manifest_key: "derived/tenant-1/kb-orders/3fa85f64/manifest.json"
+        bulk_indexed: 120
+        bulk_failed: 0
+        errors: []
+    jobPollPartial:
+      summary: PARTIAL ingest (bulk failures)
+      value:
+        id: "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
+        status: PARTIAL
+        kb_id: "kb-notes"
+        bulk_indexed: 98
+        bulk_failed: 2
+        errors:
+          - "a94a8fe5ccb19ba61c4c0873d391e987982fbbd3ff24a764d7e7c6c7c97cfdc6"
+    jobQueued:
+      summary: Immediately after POST /jobs
+      value:
+        id: "550e8400-e29b-41d4-a716-446655440000"
+        status: QUEUED
+        s3_key: "tenant/kb/key.txt"
+    jobRunning:
+      summary: Worker has started ingest
+      value:
+        id: "550e8400-e29b-41d4-a716-446655440000"
+        status: RUNNING
+        kb_id: "kb-notes"
+        manifest_key: null
+        bulk_indexed: 0
+        bulk_failed: 0
+        errors: []
   securitySchemes:
     bearerAuth:
       type: http
