@@ -22,6 +22,21 @@ JOB_STATUSES_CANONICAL: frozenset[str] = frozenset(
     },
 )
 
+# Stable field set for GET /v1/kbs/.../jobs/... and GET /v1/jobs/... poll JSON.
+JOB_POLL_BODY_KEYS: frozenset[str] = frozenset(
+    {
+        "id",
+        "status",
+        "kb_id",
+        "manifest_key",
+        "chunk_count",
+        "embed_model",
+        "bulk_indexed",
+        "bulk_failed",
+        "errors",
+    },
+)
+
 # GSI partition name is historical (“RUNNING”) but kept for backwards compatibility —
 # stores all ingest jobs regardless of semantic status unless we migrate data.
 JOB_GSI1_PARTITION_PK = "JOB#RUNNING"
@@ -48,11 +63,16 @@ def job_item_to_api_body(job_id: str, item: dict[str, Any]) -> dict[str, Any]:
     raw_st = item.get("status", {}).get("S")
     st = normalize_job_status_for_read(raw_st)
 
+    chunk_n = item.get("chunk_count", {}).get("N")
+    chunk_count = int(chunk_n) if chunk_n is not None else None
+
     body: dict[str, Any] = {
         "id": job_id,
         "status": st,
         "kb_id": item.get("kb_id", {}).get("S"),
         "manifest_key": item.get("manifest_key", {}).get("S"),
+        "chunk_count": chunk_count,
+        "embed_model": item.get("embedding_model_id", {}).get("S"),
         "bulk_indexed": int(item.get("bulk_indexed", {}).get("N", "0")),
         "bulk_failed": int(item.get("bulk_failed", {}).get("N", "0")),
         "errors": [],

@@ -171,7 +171,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             Key={"PK": {"S": f"KB#{kb_id}"}, "SK": {"S": f"JOB#{job_id}"}},
             UpdateExpression=(
                 "SET #s = :st, manifest_key = :mk, bulk_indexed = :bi, "
-                "bulk_failed = :bf, ingest_errors = :ie"
+                "bulk_failed = :bf, ingest_errors = :ie, chunk_count = :cc"
             ),
             ExpressionAttributeNames={"#s": "status"},
             ExpressionAttributeValues={
@@ -180,6 +180,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 ":bi": {"N": str(bulk_out.indexed_ok)},
                 ":bf": {"N": str(len(bulk_out.failed_ids))},
                 ":ie": {"S": ingest_errors[:350_000]},
+                ":cc": {"N": str(len(chunks))},
             },
         )
 

@@ -3,6 +3,8 @@
   "status": "SUCCEEDED",
   "kb_id": "kb-orders",
   "manifest_key": "derived/tenant-1/kb-orders/3fa85f64-5717-4562-b3fc-2c963f66afa6/manifest.json",
+  "chunk_count": 120,
+  "embed_model": "amazon.titan-embed-text-v1",
   "bulk_indexed": 120,
   "bulk_failed": 0,
   "errors": []

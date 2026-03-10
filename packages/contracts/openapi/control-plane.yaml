@@ -94,12 +94,18 @@ paths:
           description: Job missing
   /v1/jobs/{jobId}:
     get:
-      summary: Poll job status (legacy tenant+job GSI lookup; prefer `/v1/kbs/{kbId}/jobs/{jobId}`)
+      summary: Poll job status (O(1) with `kb_id` query; otherwise GSI tenant+job lookup)
       security: [{ bearerAuth: [] }]
       parameters:
         - name: jobId
           in: path
           required: true
+          schema:
+            type: string
+        - name: kb_id
+          in: query
+          required: false
+          description: When set, load by base-table PK/SK `KB#kb_id` + `JOB#jobId` (recommended)
           schema:
             type: string
       responses:
@@ -126,8 +132,17 @@ components:
       $ref: "../schemas/job-status.schema.json"
     JobPollResponse:
       type: object
-      description: Mirrors DynamoDB ingest job projection after worker updates
-      required: [id, status, bulk_indexed, bulk_failed, errors]
+      description: Mirrors DynamoDB ingest job projection (stable keys for UI polling)
+      required:
+        - id
+        - status
+        - kb_id
+        - manifest_key
+        - chunk_count
+        - embed_model
+        - bulk_indexed
+        - bulk_failed
+        - errors
       properties:
         id:
           type: string
@@ -140,6 +155,15 @@ components:
         manifest_key:
           type: string
           nullable: true
+          description: S3 manifest key when worker finished first pass
+        chunk_count:
+          type: integer
+          nullable: true
+          description: Set after ingest completes (`null` while RUNNING early)
+        embed_model:
+          type: string
+          nullable: true
+          description: Embedding model id (persisted from job POST / worker SFN payload)
         bulk_indexed:
           type: integer
           minimum: 0
@@ -171,6 +195,8 @@ components:
         status: SUCCEEDED
         kb_id: "kb-orders"
         manifest_key: "derived/tenant-1/kb-orders/3fa85f64/manifest.json"
+        chunk_count: 120
+        embed_model: "amazon.titan-embed-text-v1"
         bulk_indexed: 120
         bulk_failed: 0
         errors: []
@@ -180,6 +206,9 @@ components:
         id: "9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
         status: PARTIAL
         kb_id: "kb-notes"
+        manifest_key: "derived/tenant/kb-notes/9b1/manifest.json"
+        chunk_count: 120
+        embed_model: "amazon.titan-embed-text-v1"
         bulk_indexed: 98
         bulk_failed: 2
         errors:
@@ -197,6 +226,8 @@ components:
         status: RUNNING
         kb_id: "kb-notes"
         manifest_key: null
+        chunk_count: null
+        embed_model: "amazon.titan-embed-text-v1"
         bulk_indexed: 0
         bulk_failed: 0
         errors: []

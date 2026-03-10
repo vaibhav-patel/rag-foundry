@@ -164,6 +164,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         if "Item" not in g or g["Item"].get("GSI1SK", {}).get("S") != f"TENANT#{tenant}":
             return _json_response(403, {"title": "Forbidden", "detail": "Invalid KB"})
         emb = g["Item"].get("embedding_model_id", {}).get("S", "amazon.titan-embed-text-v1")
+        resolved_embed = str(body.get("embedding_model_id") or emb).strip() or emb
         job_id = str(uuid.uuid4())
         ddb_client.put_item(
             TableName=table,
@@ -174,6 +175,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 "GSI1SK": {"S": gsi_sort_key_for_tenant_job(tenant=tenant, job_id=job_id)},
                 "tenant": {"S": tenant},
                 "kb_id": {"S": kb_id},
+                "embedding_model_id": {"S": resolved_embed},
                 "status": {"S": JOB_STATUS_QUEUE},
             },
         )
@@ -182,7 +184,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             "kb_id": kb_id,
             "job_id": job_id,
             "s3_key": s3_key,
-            "embedding_model_id": body.get("embedding_model_id") or emb,
+            "embedding_model_id": resolved_embed,
             "chunk_chars": int(body.get("chunk_chars", 1200)),
         }
         sfn_client.start_execution(
@@ -213,6 +215,25 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     m_job = re.fullmatch(r"/v1/jobs/([^/]+)", path)
     if m_job and method == "GET":
         job_id = m_job.group(1)
+        qs_param = event.get("queryStringParameters") or {}
+        kb_q = ""
+        if isinstance(qs_param, dict):
+            kb_q = str(qs_param.get("kb_id") or qs_param.get("kbId") or "").strip()
+        if kb_q:
+            keyed = ddb_client.get_item(
+                TableName=table,
+                Key={"PK": {"S": f"KB#{kb_q}"}, "SK": {"S": f"JOB#{job_id}"}},
+            )
+            if "Item" not in keyed:
+                return _json_response(404, {"title": "Not found", "detail": "Job not found"})
+            itq = keyed["Item"]
+            if itq.get("tenant", {}).get("S") != tenant:
+                return _json_response(403, {"title": "Forbidden", "detail": "Invalid job"})
+            stored_kb = itq.get("kb_id", {}).get("S")
+            if stored_kb not in (None, "") and stored_kb != kb_q:
+                return _json_response(403, {"title": "Forbidden", "detail": "kb_id mismatch"})
+            return _json_response(200, job_item_to_api_body(job_id, itq))
+
         q = ddb_client.query(
             TableName=table,
             IndexName="GSI1",
