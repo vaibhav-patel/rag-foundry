@@ -9,13 +9,15 @@ import uuid
 from typing import Any
 
 import boto3
-import vector_stub
+from dense_search import run_dense_search
 from job_status import (
     JOB_GSI1_PARTITION_PK,
     JOB_STATUS_QUEUE,
     gsi_sort_key_for_tenant_job,
     job_item_to_api_body,
 )
+
+from opensearch_client import create_opensearch_client
 
 _region = os.environ.get("AWS_REGION") or os.environ.get("AWS_DEFAULT_REGION") or "us-east-1"
 ddb_client = boto3.client("dynamodb", region_name=_region)
@@ -279,13 +281,19 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         if "Item" not in g or g["Item"].get("GSI1SK", {}).get("S") != f"TENANT#{tenant}":
             return _json_response(403, {"title": "Forbidden", "detail": "Invalid KB"})
         qtext = str(body.get("q", ""))
-        hits = vector_stub.dense_search_stub(
-            endpoint=os.environ.get("OPENSEARCH_ENDPOINT", ""),
-            collection_name=os.environ.get("OPENSEARCH_COLLECTION_NAME", ""),
+        search_mode = os.environ.get("SEARCH_MODE", "stub")
+        http_st, search_payload = run_dense_search(
+            search_mode=search_mode,
+            os_client=create_opensearch_client(),
+            index_name=os.environ.get("OPENSEARCH_INDEX_NAME", "rag-foundry-chunks"),
+            tenant_id=tenant,
+            kb_id=kb_id,
+            body=body,
             query_text=qtext,
-            top_k=int(body.get("top_k", 5)),
         )
-        return _json_response(200, {"kb_id": kb_id, **hits})
+        if http_st != 200:
+            return _json_response(http_st, search_payload)
+        return _json_response(200, {"kb_id": kb_id, **search_payload})
 
     m_query = re.fullmatch(r"/v1/kbs/([^/]+)/query", path)
     if m_query and method == "POST":

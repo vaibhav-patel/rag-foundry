@@ -1,4 +1,4 @@
-"""OpenSearch Serverless search stub (dense path to be wired to _search API)."""
+"""Search stub backend when ``SEARCH_MODE=stub`` — see ``dense_search.py`` for kNN/live."""
 
 from __future__ import annotations
 

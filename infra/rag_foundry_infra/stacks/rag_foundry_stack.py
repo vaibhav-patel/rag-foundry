@@ -325,6 +325,7 @@ class RagFoundryStack(Stack):
         worker_lambda.add_environment("OPENSEARCH_INDEX_NAME", index_name_default)
         collection_endpoint = collection.attr_collection_endpoint
         api_lambda.add_environment("OPENSEARCH_ENDPOINT", collection_endpoint)
+        api_lambda.add_environment("SEARCH_MODE", "stub")
         worker_lambda.add_environment("OPENSEARCH_ENDPOINT", collection_endpoint)
         worker_lambda.add_environment("BULK_BATCH_SIZE", "50")
 

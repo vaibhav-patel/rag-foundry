@@ -22,8 +22,33 @@ paths:
       security: [{ bearerAuth: [] }]
   /v1/kbs/{kbId}/search:
     post:
-      summary: Dense / hybrid search (OpenSearch Serverless stub)
+      summary: Dense kNN search (SEARCH_MODE=stub|live OpenSearch)
       security: [{ bearerAuth: [] }]
+      parameters:
+        - name: kbId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/DenseSearchRequest"
+      responses:
+        "200":
+          description: Ranked chunks
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DenseSearchResponse"
+        "400":
+          description: Invalid body (e.g. live mode without query_embedding)
+        "502":
+          description: OpenSearch error
+        "503":
+          description: Live search but OpenSearch not configured
   /v1/kbs/{kbId}/uploads:
     post:
       summary: Presigned PUT for raw document
@@ -130,6 +155,66 @@ components:
   schemas:
     JobStatus:
       $ref: "../schemas/job-status.schema.json"
+    DenseSearchHit:
+      type: object
+      description: Single chunk hit from OpenSearch `_source`
+      required: [id, score, text]
+      properties:
+        id:
+          type: string
+          description: Document `_id`
+        score:
+          type: number
+          description: kNN relevance score (`_score`)
+        text:
+          type: string
+          description: `chunk_text` field
+        metadata:
+          type: object
+          additionalProperties: true
+          nullable: true
+          description: Optional metadata map stored with the chunk
+    DenseSearchRequest:
+      type: object
+      properties:
+        q:
+          type: string
+          description: Free-text query string (stub mode; retained for BM25 hybrid later)
+        query_embedding:
+          type: array
+          items:
+            type: number
+          description: Query vector (`SEARCH_MODE=live` requires this client-side embedding)
+        k:
+          type: integer
+          minimum: 1
+          maximum: 100
+          default: 5
+          description: kNN neighbor count (`top_k` alias)
+        top_k:
+          type: integer
+          minimum: 1
+          maximum: 100
+          description: Alias for `k`
+        min_score:
+          type: number
+          description: Passed to OpenSearch `min_score` (optional)
+    DenseSearchResponse:
+      type: object
+      required: [kb_id, hits, total, backend]
+      properties:
+        kb_id:
+          type: string
+        hits:
+          type: array
+          items:
+            $ref: "#/components/schemas/DenseSearchHit"
+        total:
+          type: integer
+          minimum: 0
+        backend:
+          type: string
+          description: e.g. `opensearch-serverless-stub` or `opensearch-serverless-knn`
     JobPollResponse:
       type: object
       description: Mirrors DynamoDB ingest job projection (stable keys for UI polling)
