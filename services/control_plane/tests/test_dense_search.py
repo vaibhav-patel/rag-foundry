@@ -84,6 +84,98 @@ def test_live_requires_query_embedding() -> None:
     cli.search.assert_not_called()
 
 
+def test_live_hybrid_query_shape(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENSEARCH_EMBEDDING_DIM", "2")
+    client = MagicMock()
+    client.search.return_value = {"hits": {"total": 0, "hits": []}}
+    st, payload = run_dense_search(
+        search_mode="live",
+        os_client=client,
+        index_name="chunks",
+        tenant_id="t1",
+        kb_id="kb1",
+        body={
+            "hybrid": True,
+            "query_embedding": [1.0, 0.0],
+            "k": 8,
+            "bm25_weight": 2,
+            "vector_weight": 0.5,
+            "min_score": 0.1,
+        },
+        query_text="  lexical q  ",
+    )
+    assert st == 200
+    assert payload["backend"] == "opensearch-serverless-hybrid"
+    sb = client.search.call_args.kwargs["body"]
+    qb = sb["query"]["bool"]
+    assert qb["filter"] == [{"term": {"tenant_id": "t1"}}, {"term": {"kb_id": "kb1"}}]
+    assert qb["minimum_should_match"] == 1
+    should = qb["should"]
+    assert len(should) == 2
+    mm = should[0]["multi_match"]
+    assert mm["query"] == "lexical q"
+    assert mm["fields"] == ["chunk_text"]
+    assert mm["boost"] == 2.0
+    knn_emb = should[1]["knn"]["embedding"]
+    assert knn_emb["vector"] == [1.0, 0.0]
+    assert knn_emb["k"] == 8
+    assert knn_emb["boost"] == 0.5
+    assert sb["min_score"] == 0.1
+
+
+def test_live_hybrid_requires_nonempty_q() -> None:
+    cli = MagicMock()
+    st, err = run_dense_search(
+        search_mode="live",
+        os_client=cli,
+        index_name="idx",
+        tenant_id="t1",
+        kb_id="kb1",
+        body={"hybrid": True, "query_embedding": [0.5, 0.5]},
+        query_text="   ",
+    )
+    assert st == 400
+    assert "non-empty" in err["detail"] and "`q`" in err["detail"]
+    cli.search.assert_not_called()
+
+
+def test_live_hybrid_requires_embedding() -> None:
+    cli = MagicMock()
+    st, err = run_dense_search(
+        search_mode="live",
+        os_client=cli,
+        index_name="idx",
+        tenant_id="t1",
+        kb_id="kb1",
+        body={"hybrid": True},
+        query_text="ok",
+    )
+    assert st == 400
+    assert "query_embedding" in err["detail"]
+    cli.search.assert_not_called()
+
+
+def test_live_hybrid_weights_cannot_both_be_zero() -> None:
+    cli = MagicMock()
+    st, err = run_dense_search(
+        search_mode="live",
+        os_client=cli,
+        index_name="idx",
+        tenant_id="t1",
+        kb_id="kb1",
+        body={
+            "hybrid": True,
+            "query_embedding": [1.0, 2.0],
+            "bm25_weight": 0,
+            "vector_weight": 0,
+        },
+        query_text="x",
+    )
+    assert st == 400
+    assert "both" in err["detail"].lower()
+    cli.search.assert_not_called()
+
+
 def test_live_maps_opensearch_hit(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENSEARCH_EMBEDDING_DIM", "2")
     client = MagicMock()

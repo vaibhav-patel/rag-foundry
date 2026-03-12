@@ -1,9 +1,9 @@
-"""Dense kNN search over chunk index (live OpenSearch) or stub (CI / no endpoint)."""
+"""Dense / hybrid search over chunk index — live OpenSearch vs stub."""
 
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Any, cast
 
 import vector_stub
 from opensearchpy import OpenSearch
@@ -44,6 +44,26 @@ def parse_min_score(body: dict[str, Any]) -> float | None:
         return None
 
 
+def parse_hybrid_requested(body: dict[str, Any]) -> bool:
+    h = body.get("hybrid")
+    if isinstance(h, bool):
+        return h
+    if isinstance(h, str):
+        return h.strip().lower() in ("true", "1", "yes")
+    if isinstance(h, int):
+        return h == 1
+    return False
+
+
+def parse_weight(body: dict[str, Any], key: str, default: float = 1.0) -> float:
+    if key not in body:
+        return default
+    try:
+        return max(0.0, float(body[key]))
+    except (TypeError, ValueError):
+        return default
+
+
 def coerce_query_embedding(body: dict[str, Any]) -> list[float] | None:
     vec = body.get("query_embedding")
     if not isinstance(vec, list) or len(vec) == 0:
@@ -54,6 +74,71 @@ def coerce_query_embedding(body: dict[str, Any]) -> list[float] | None:
             return None
         out.append(float(x))
     return out
+
+
+def _tenant_kb_filter(*, tenant_id: str, kb_id: str) -> list[dict[str, Any]]:
+    return [
+        {"term": {"tenant_id": tenant_id}},
+        {"term": {"kb_id": kb_id}},
+    ]
+
+
+def _build_vector_only_query_body(
+    *,
+    vec: list[float],
+    k: int,
+    tenant_id: str,
+    kb_id: str,
+) -> dict[str, Any]:
+    return {
+        "query": {
+            "bool": {
+                "must": [{"knn": {"embedding": {"vector": vec, "k": k}}}],
+                "filter": _tenant_kb_filter(tenant_id=tenant_id, kb_id=kb_id),
+            }
+        },
+    }
+
+
+def _build_hybrid_query_body(
+    *,
+    query_text: str,
+    vec: list[float],
+    k: int,
+    tenant_id: str,
+    kb_id: str,
+    bm25_weight: float,
+    vector_weight: float,
+) -> dict[str, Any]:
+    """Additive ``bool.should``: BM25 lexical + boosted kNN (weighted-sum style scoring)."""
+
+    return {
+        "query": {
+            "bool": {
+                "filter": _tenant_kb_filter(tenant_id=tenant_id, kb_id=kb_id),
+                "should": [
+                    {
+                        "multi_match": {
+                            "query": query_text,
+                            "fields": ["chunk_text"],
+                            "type": "best_fields",
+                            "boost": bm25_weight,
+                        },
+                    },
+                    {
+                        "knn": {
+                            "embedding": {
+                                "vector": vec,
+                                "k": k,
+                                "boost": vector_weight,
+                            },
+                        },
+                    },
+                ],
+                "minimum_should_match": 1,
+            },
+        },
+    }
 
 
 def _map_hit(hit: dict[str, Any]) -> dict[str, Any]:
@@ -104,32 +189,81 @@ def run_dense_search(
             },
         )
 
+    hybrid = parse_hybrid_requested(body)
     qvec = coerce_query_embedding(body)
-    if not qvec:
+
+    bm25_w = parse_weight(body, "bm25_weight", 1.0)
+    vec_w = parse_weight(body, "vector_weight", 1.0)
+    qstrip = query_text.strip()
+
+    if hybrid:
+        if not qstrip:
+            return (
+                400,
+                {
+                    "title": "Bad Request",
+                    "detail": "hybrid search requires non-empty `q` (BM25 branch) "
+                    + "and `query_embedding` (vector branch)",
+                },
+            )
+        if not qvec:
+            return (
+                400,
+                {
+                    "title": "Bad Request",
+                    "detail": "`query_embedding` is required when hybrid=true "
+                    + "(and non-empty `q` for lexical branch)",
+                },
+            )
+        if bm25_w == 0.0 and vec_w == 0.0:
+            return (
+                400,
+                {
+                    "title": "Bad Request",
+                    "detail": "bm25_weight and vector_weight cannot both be 0",
+                },
+            )
+    elif not qvec:
         return (
             400,
             {
                 "title": "Bad Request",
-                "detail": "query_embedding (array of numbers) is required when SEARCH_MODE=live",
+                "detail": (
+                    "query_embedding (array of numbers) is required when SEARCH_MODE=live "
+                    "(set hybrid=true with q+query_embedding for hybrid)"
+                ),
             },
         )
 
     k = parse_knn_k(body)
     min_score = parse_min_score(body)
-    vec = pad_query_vector(qvec)
+    vec = pad_query_vector(cast(list[float], qvec))
+
+    inner: dict[str, Any]
+    if hybrid:
+        inner = _build_hybrid_query_body(
+            query_text=qstrip,
+            vec=vec,
+            k=k,
+            tenant_id=tenant_id,
+            kb_id=kb_id,
+            bm25_weight=bm25_w,
+            vector_weight=vec_w,
+        )
+        backend = "opensearch-serverless-hybrid"
+    else:
+        inner = _build_vector_only_query_body(
+            vec=vec,
+            k=k,
+            tenant_id=tenant_id,
+            kb_id=kb_id,
+        )
+        backend = "opensearch-serverless-knn"
 
     search_body: dict[str, Any] = {
         "size": k,
-        "query": {
-            "bool": {
-                "must": [{"knn": {"embedding": {"vector": vec, "k": k}}}],
-                "filter": [
-                    {"term": {"tenant_id": tenant_id}},
-                    {"term": {"kb_id": kb_id}},
-                ],
-            }
-        },
         "_source": ["chunk_text", "metadata", "chunk_id", "kb_id", "tenant_id"],
+        **inner,
     }
     if min_score is not None:
         search_body["min_score"] = min_score
@@ -156,5 +290,5 @@ def run_dense_search(
     return 200, {
         "hits": hits,
         "total": total,
-        "backend": "opensearch-serverless-knn",
+        "backend": backend,
     }

@@ -22,7 +22,7 @@ paths:
       security: [{ bearerAuth: [] }]
   /v1/kbs/{kbId}/search:
     post:
-      summary: Dense kNN search (SEARCH_MODE=stub|live OpenSearch)
+      summary: Dense vector search / optional hybrid BM25+kNN (SEARCH_MODE=stub|live OpenSearch)
       security: [{ bearerAuth: [] }]
       parameters:
         - name: kbId
@@ -44,7 +44,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/DenseSearchResponse"
         "400":
-          description: Invalid body (e.g. live mode without query_embedding)
+          description: Invalid body (e.g. live without query_embedding; hybrid=true without q or embedding; both weights 0)
         "502":
           description: OpenSearch error
         "503":
@@ -177,14 +177,28 @@ components:
     DenseSearchRequest:
       type: object
       properties:
+        hybrid:
+          type: boolean
+          default: false
+          description: When true in live mode, run hybrid search — lexical `multi_match` on `chunk_text` plus kNN on `embedding` in a single `bool` query (`should`), with boosts from `bm25_weight` / `vector_weight`. Requires non-empty `q` and `query_embedding`.
+        bm25_weight:
+          type: number
+          minimum: 0
+          default: 1
+          description: Boost on the lexical `multi_match` branch (ignored unless `hybrid=true`)
+        vector_weight:
+          type: number
+          minimum: 0
+          default: 1
+          description: Boost on the kNN embedding branch (ignored unless `hybrid=true`; cannot both weights be 0 when hybrid)
         q:
           type: string
-          description: Free-text query string (stub mode; retained for BM25 hybrid later)
+          description: Free-text query (stub mode); required non-empty when `hybrid=true` in live mode
         query_embedding:
           type: array
           items:
             type: number
-          description: Query vector (`SEARCH_MODE=live` requires this client-side embedding)
+          description: Query vector (`SEARCH_MODE=live` vector search requires this; hybrid also requires this)
         k:
           type: integer
           minimum: 1
@@ -214,7 +228,7 @@ components:
           minimum: 0
         backend:
           type: string
-          description: e.g. `opensearch-serverless-stub` or `opensearch-serverless-knn`
+          description: e.g. `opensearch-serverless-stub`, `opensearch-serverless-knn`, or `opensearch-serverless-hybrid` when `hybrid=true`
     JobPollResponse:
       type: object
       description: Mirrors DynamoDB ingest job projection (stable keys for UI polling)
