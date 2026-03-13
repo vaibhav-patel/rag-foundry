@@ -176,6 +176,26 @@ def test_live_hybrid_weights_cannot_both_be_zero() -> None:
     cli.search.assert_not_called()
 
 
+def test_live_fetch_size_overrides_opensearch_k(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("OPENSEARCH_EMBEDDING_DIM", "2")
+    client = MagicMock()
+    client.search.return_value = {"hits": {"total": 0, "hits": []}}
+    st, _payload = run_dense_search(
+        search_mode="live",
+        os_client=client,
+        index_name="chunks",
+        tenant_id="t1",
+        kb_id="kb1",
+        body={"query_embedding": [1.0, 0.0], "k": 5},
+        query_text="",
+        fetch_size=20,
+    )
+    assert st == 200
+    sb = client.search.call_args.kwargs["body"]
+    assert sb["size"] == 20
+    assert sb["query"]["bool"]["must"][0]["knn"]["embedding"]["k"] == 20
+
+
 def test_live_maps_opensearch_hit(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENSEARCH_EMBEDDING_DIM", "2")
     client = MagicMock()

@@ -9,13 +9,14 @@ import uuid
 from typing import Any
 
 import boto3
-from dense_search import run_dense_search
+from dense_search import parse_knn_k, run_dense_search
 from job_status import (
     JOB_GSI1_PARTITION_PK,
     JOB_STATUS_QUEUE,
     gsi_sort_key_for_tenant_job,
     job_item_to_api_body,
 )
+from rerank_hook import dense_search_fetch_size, rerank_dense_hits_maybe
 
 from opensearch_client import create_opensearch_client
 
@@ -282,6 +283,8 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             return _json_response(403, {"title": "Forbidden", "detail": "Invalid KB"})
         qtext = str(body.get("q", ""))
         search_mode = os.environ.get("SEARCH_MODE", "stub")
+        k_desired = parse_knn_k(body)
+        fetch_sz = dense_search_fetch_size(k_desired)
         http_st, search_payload = run_dense_search(
             search_mode=search_mode,
             os_client=create_opensearch_client(),
@@ -290,9 +293,15 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             kb_id=kb_id,
             body=body,
             query_text=qtext,
+            fetch_size=fetch_sz,
         )
         if http_st != 200:
             return _json_response(http_st, search_payload)
+        search_payload = rerank_dense_hits_maybe(
+            search_payload,
+            query_text=qtext,
+            desired_top_k=k_desired,
+        )
         return _json_response(200, {"kb_id": kb_id, **search_payload})
 
     m_query = re.fullmatch(r"/v1/kbs/([^/]+)/query", path)

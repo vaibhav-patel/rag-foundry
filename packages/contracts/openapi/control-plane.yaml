@@ -229,6 +229,9 @@ components:
         backend:
           type: string
           description: e.g. `opensearch-serverless-stub`, `opensearch-serverless-knn`, or `opensearch-serverless-hybrid` when `hybrid=true`
+        reranked:
+          type: boolean
+          description: Present and true when hits were reordered by the optional rerank Lambda or `RERANK_URL` hook (up to 20 candidates, response truncated to requested `k`)
     JobPollResponse:
       type: object
       description: Mirrors DynamoDB ingest job projection (stable keys for UI polling)

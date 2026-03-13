@@ -329,6 +329,26 @@ class RagFoundryStack(Stack):
         worker_lambda.add_environment("OPENSEARCH_ENDPOINT", collection_endpoint)
         worker_lambda.add_environment("BULK_BATCH_SIZE", "50")
 
+        rerank_arn_param = ssm.StringParameter(
+            self,
+            "RerankLambdaArnParam",
+            parameter_name="/rag-foundry/control-plane/rerank-lambda-arn",
+            string_value="-",
+            description="Optional synchronous reranker Lambda ARN; '-' disables until replaced.",
+        )
+        rerank_arn_param.grant_read(api_lambda)
+        api_lambda.add_environment(
+            "RERANK_LAMBDA_ARN_PARAMETER",
+            rerank_arn_param.parameter_name,
+        )
+        api_lambda.add_to_role_policy(
+            iam.PolicyStatement(
+                sid="InvokeOptionalRerankLambdas",
+                actions=["lambda:InvokeFunction"],
+                resources=[f"arn:aws:lambda:{self.region}:{self.account}:function:*"],
+            )
+        )
+
         # OpenSearch Serverless: identity HTTP data-plane policy for this collection + indices.
         account = self.account
         region = self.region
@@ -405,6 +425,12 @@ class RagFoundryStack(Stack):
         CfnOutput(self, "OpensearchChunkIndexName", value=index_name_default)
         CfnOutput(self, "AossDataAccessPolicyName", value=data_policy_name)
         CfnOutput(self, "AossIndexResourcePattern", value=f"index/{collection_name}/*")
+        CfnOutput(
+            self,
+            "RerankLambdaArnSsmParameter",
+            description="Stores optional reranker Lambda ARN (see `RERANK_LAMBDA_ARN_PARAMETER`)",
+            value=rerank_arn_param.parameter_name,
+        )
 
         # DLQ alarm stub (metric on state machine or SQS - simple queue depth)
         from aws_cdk import aws_cloudwatch as cw

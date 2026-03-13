@@ -163,6 +163,7 @@ def run_dense_search(
     kb_id: str,
     body: dict[str, Any],
     query_text: str,
+    fetch_size: int | None = None,
 ) -> tuple[int, dict[str, Any]]:
     """Return ``(http_status, response_body)``.
 
@@ -235,7 +236,9 @@ def run_dense_search(
             },
         )
 
-    k = parse_knn_k(body)
+    desired_k = parse_knn_k(body)
+    ef = fetch_size if fetch_size is not None else desired_k
+    ef = max(1, min(100, int(ef)))
     min_score = parse_min_score(body)
     vec = pad_query_vector(cast(list[float], qvec))
 
@@ -244,7 +247,7 @@ def run_dense_search(
         inner = _build_hybrid_query_body(
             query_text=qstrip,
             vec=vec,
-            k=k,
+            k=ef,
             tenant_id=tenant_id,
             kb_id=kb_id,
             bm25_weight=bm25_w,
@@ -254,14 +257,14 @@ def run_dense_search(
     else:
         inner = _build_vector_only_query_body(
             vec=vec,
-            k=k,
+            k=ef,
             tenant_id=tenant_id,
             kb_id=kb_id,
         )
         backend = "opensearch-serverless-knn"
 
     search_body: dict[str, Any] = {
-        "size": k,
+        "size": ef,
         "_source": ["chunk_text", "metadata", "chunk_id", "kb_id", "tenant_id"],
         **inner,
     }
