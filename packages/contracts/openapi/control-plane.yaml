@@ -18,8 +18,35 @@ paths:
       security: [{ bearerAuth: [] }]
   /v1/kbs/{kbId}/query:
     post:
-      summary: RAG query (Bedrock generation + audit)
+      summary: RAG query — dense retrieval + bounded context + Bedrock generation (+ audit)
       security: [{ bearerAuth: [] }]
+      parameters:
+        - name: kbId
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RagQueryRequest"
+      responses:
+        "200":
+          description: Model answer plus chunk citations
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/RagQueryResponse"
+        "400":
+          description: Live search prerequisites failed (delegated dense search validation)
+        "403":
+          description: KB not visible to tenant
+        "502":
+          description: OpenSearch/search transport error
+        "503":
+          description: Live search unavailable
   /v1/kbs/{kbId}/search:
     post:
       summary: Dense vector search / optional hybrid BM25+kNN (SEARCH_MODE=stub|live OpenSearch)
@@ -232,6 +259,53 @@ components:
         reranked:
           type: boolean
           description: Present and true when hits were reordered by the optional rerank Lambda or `RERANK_URL` hook (up to 20 candidates, response truncated to requested `k`)
+    RagQueryRequest:
+      allOf:
+        - $ref: "#/components/schemas/DenseSearchRequest"
+        - type: object
+          required: [question]
+          properties:
+            question:
+              type: string
+              description: User question (also used as lexical `q` fallback when `q` is omitted)
+            context_k:
+              type: integer
+              minimum: 1
+              maximum: 50
+              default: 8
+              description: |
+                How many top ranked hits to concatenate into the generator context (after optional rerank).
+                Default can be overridden via Lambda env `CONTEXT_K_DEFAULT`.
+            model_id:
+              type: string
+              description: Bedrock model identifier
+            guardrails_id:
+              type: string
+              description: Optional Bedrock guardrail id
+            guardrails_version:
+              type: string
+              default: DRAFT
+      description: >
+        Env `CONTEXT_CHAR_BUDGET` (default 12000) clamps total context characters after joining chunks.
+    RagQueryResponse:
+      type: object
+      required: [answer, citations, kb_id, guardrails_applied]
+      properties:
+        answer:
+          type: string
+        citations:
+          type: array
+          items:
+            type: object
+            required: [id]
+            properties:
+              id:
+                type: string
+                description: Dense hit / chunk id surfaced to the user
+        kb_id:
+          type: string
+        guardrails_applied:
+          type: boolean
     JobPollResponse:
       type: object
       description: Mirrors DynamoDB ingest job projection (stable keys for UI polling)

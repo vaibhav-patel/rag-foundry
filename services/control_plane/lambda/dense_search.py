@@ -173,13 +173,16 @@ def run_dense_search(
 
     mode = (search_mode or "stub").strip().lower()
     if mode != "live":
+        top_k = fetch_size if fetch_size is not None else parse_knn_k(body)
+        top_k = max(1, min(100, int(top_k)))
         stub = vector_stub.dense_search_stub(
             endpoint=os.environ.get("OPENSEARCH_ENDPOINT", ""),
             collection_name=os.environ.get("OPENSEARCH_COLLECTION_NAME", ""),
             query_text=query_text,
-            top_k=parse_knn_k(body),
+            top_k=top_k,
         )
-        return 200, {**stub, "backend": "opensearch-serverless-stub"}
+        # Preserve stub backend (e.g. `opensearch-serverless-stub-injected` for test doubles).
+        return 200, stub
 
     if os_client is None:
         return (

@@ -1,5 +1,8 @@
 import importlib.util
+import json
 import os
+
+import pytest
 
 _path = os.path.join(os.path.dirname(__file__), "..", "lambda", "vector_stub.py")
 _spec = importlib.util.spec_from_file_location("vector_stub", _path)
@@ -12,3 +15,14 @@ def test_dense_search_stub_shape():
     r = _mod.dense_search_stub(endpoint="https://x", collection_name="c", query_text="q")
     assert r["hits"] == []
     assert r["backend"] == "opensearch-serverless-stub"
+
+
+def test_dense_search_stub_injected_json(monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.setenv(
+        "RAG_STUB_DENSE_HITS_JSON",
+        json.dumps([{"id": "c1", "score": 1, "text": "x", "metadata": None}]),
+    )
+    r = _mod.dense_search_stub(endpoint="", collection_name="", query_text="", top_k=5)
+    assert r["backend"] == "opensearch-serverless-stub-injected"
+    assert r["hits"][0]["text"] == "x"
+    monkeypatch.delenv("RAG_STUB_DENSE_HITS_JSON", raising=False)

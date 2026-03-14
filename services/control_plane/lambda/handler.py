@@ -16,6 +16,7 @@ from job_status import (
     gsi_sort_key_for_tenant_job,
     job_item_to_api_body,
 )
+from rag_context import format_rag_context, parse_context_char_budget, parse_context_k
 from rerank_hook import dense_search_fetch_size, rerank_dense_hits_maybe
 
 from opensearch_client import create_opensearch_client
@@ -308,20 +309,61 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     if m_query and method == "POST":
         kb_id = m_query.group(1)
         body = json.loads(event.get("body") or "{}")
-        question = body.get("question", "")
+        question = str(body.get("question", "") or "")
         guardrails_id = body.get("guardrails_id") or os.environ.get("BEDROCK_GUARDRAILS_ID", "")
+        g_kb = ddb_client.get_item(
+            TableName=table,
+            Key={"PK": {"S": f"TENANT#{tenant}"}, "SK": {"S": f"KB#{kb_id}"}},
+        )
+        if "Item" not in g_kb or g_kb["Item"].get("GSI1SK", {}).get("S") != f"TENANT#{tenant}":
+            return _json_response(403, {"title": "Forbidden", "detail": "Invalid KB"})
+
+        search_mode = os.environ.get("SEARCH_MODE", "stub")
+        ctx_k = parse_context_k(body)
+        retrieval_k = max(parse_knn_k(body), ctx_k)
+        merged_search_body = dict(body)
+        merged_search_body["k"] = retrieval_k
+        q_for_search = str(body.get("q") or question or "")
+        fetch_sz = dense_search_fetch_size(retrieval_k)
+        http_st, search_payload = run_dense_search(
+            search_mode=search_mode,
+            os_client=create_opensearch_client(),
+            index_name=os.environ.get("OPENSEARCH_INDEX_NAME", "rag-foundry-chunks"),
+            tenant_id=tenant,
+            kb_id=kb_id,
+            body=merged_search_body,
+            query_text=q_for_search,
+            fetch_size=fetch_sz,
+        )
+        if http_st != 200:
+            return _json_response(http_st, search_payload)
+
+        search_payload = rerank_dense_hits_maybe(
+            search_payload,
+            query_text=q_for_search,
+            desired_top_k=retrieval_k,
+        )
+        hits = search_payload.get("hits") or []
+        ctx_block, citations = format_rag_context(
+            hits,
+            context_k=ctx_k,
+            char_budget=parse_context_char_budget(),
+        )
+
         br = boto3.client("bedrock-runtime", region_name=_region)
         model_id = body.get("model_id", "anthropic.claude-3-haiku-20240307-v1:0")
         try:
+            user_prompt = (
+                "Answer using only the passages below. If insufficient, say you do not know.\n\n"
+                f"{ctx_block}\n\nQuestion:\n{question}"
+            )
             payload = {
                 "anthropic_version": "bedrock-2023-05-31",
                 "max_tokens": 512,
                 "messages": [
                     {
                         "role": "user",
-                        "content": [
-                            {"type": "text", "text": f"Context: (stub). Question: {question}"}
-                        ],
+                        "content": [{"type": "text", "text": user_prompt}],
                     }
                 ],
             }
@@ -356,7 +398,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             200,
             {
                 "answer": text,
-                "citations": [],
+                "citations": citations,
                 "kb_id": kb_id,
                 "guardrails_applied": bool(guardrails_id),
             },
