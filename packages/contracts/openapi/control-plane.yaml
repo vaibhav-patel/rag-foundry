@@ -278,7 +278,9 @@ components:
                 Default can be overridden via Lambda env `CONTEXT_K_DEFAULT`.
             model_id:
               type: string
-              description: Bedrock model identifier
+              description: >-
+                Overrides control-plane Lambda env GENERATION_MODEL_ID when set (Claude, Titan Text,
+                and other foundation models exposed for Converse / ConverseStream).
             guardrails_id:
               type: string
               description: Optional Bedrock guardrail id
@@ -286,7 +288,10 @@ components:
               type: string
               default: DRAFT
       description: >
-        Env `CONTEXT_CHAR_BUDGET` (default 12000) clamps total context characters after joining chunks.
+        Retrieval uses `CONTEXT_CHAR_BUDGET` (default 12000) for joined chunk text cap.
+        Generation uses Lambda env `GENERATION_MODEL_ID`, `MAX_TOKENS`, `TEMPERATURE`; optional
+        `QUERY_USE_CONVERSE_STREAM=true` aggregates ConverseStream to a single reply; audit rows
+        store `prompt_sha256`, `generation_model_id`, `audit_stub_next` (QUERY_AUDIT_EXTENSION_STUB).
     RagQueryResponse:
       type: object
       required: [answer, citations, kb_id, guardrails_applied]

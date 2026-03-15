@@ -326,6 +326,24 @@ class RagFoundryStack(Stack):
         collection_endpoint = collection.attr_collection_endpoint
         api_lambda.add_environment("OPENSEARCH_ENDPOINT", collection_endpoint)
         api_lambda.add_environment("SEARCH_MODE", "stub")
+        api_lambda.add_environment(
+            "GENERATION_MODEL_ID",
+            "anthropic.claude-3-haiku-20240307-v1:0",
+        )
+        api_lambda.add_environment("MAX_TOKENS", "512")
+        api_lambda.add_environment("TEMPERATURE", "0.2")
+        api_lambda.add_to_role_policy(
+            iam.PolicyStatement(
+                sid="BedrockChatConverse",
+                actions=[
+                    "bedrock:InvokeModel",
+                    "bedrock:InvokeModelWithResponseStream",
+                ],
+                resources=[
+                    f"arn:aws:bedrock:{self.region}::foundation-model/*",
+                ],
+            )
+        )
         worker_lambda.add_environment("OPENSEARCH_ENDPOINT", collection_endpoint)
         worker_lambda.add_environment("BULK_BATCH_SIZE", "50")
 

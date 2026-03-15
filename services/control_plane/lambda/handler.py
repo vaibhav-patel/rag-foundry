@@ -9,6 +9,14 @@ import uuid
 from typing import Any
 
 import boto3
+from bedrock_generation import (
+    audit_extension_stub,
+    canonical_prompt_sha256,
+    generate_with_converse,
+    resolve_max_tokens,
+    resolve_model_id,
+    resolve_temperature,
+)
 from dense_search import parse_knn_k, run_dense_search
 from job_status import (
     JOB_GSI1_PARTITION_PK,
@@ -351,37 +359,29 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         )
 
         br = boto3.client("bedrock-runtime", region_name=_region)
-        model_id = body.get("model_id", "anthropic.claude-3-haiku-20240307-v1:0")
+        system_prompt = (
+            "Answer using only the retrieved passages included in the user message below. "
+            "If those passages are insufficient, say that you do not know. "
+            "Be concise and accurate."
+        )
+        user_message = f"{ctx_block}\n\nQuestion:\n{question}"
+
+        generation_model_id = resolve_model_id(body.get("model_id"))
+        prompt_sha256 = canonical_prompt_sha256(system_prompt, user_message)
+        audit_stub = audit_extension_stub()
+        guard_ver = str(body.get("guardrails_version", "DRAFT"))
+
         try:
-            user_prompt = (
-                "Answer using only the passages below. If insufficient, say you do not know.\n\n"
-                f"{ctx_block}\n\nQuestion:\n{question}"
+            text = generate_with_converse(
+                br,
+                model_id=generation_model_id,
+                system_text=system_prompt,
+                user_text=user_message,
+                max_tokens=resolve_max_tokens(),
+                temperature=resolve_temperature(),
+                guardrail_id=guardrails_id if guardrails_id else None,
+                guardrail_version=guard_ver,
             )
-            payload = {
-                "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": 512,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [{"type": "text", "text": user_prompt}],
-                    }
-                ],
-            }
-            invoke_kw: dict[str, Any] = {
-                "modelId": model_id,
-                "body": json.dumps(payload).encode("utf-8"),
-                "contentType": "application/json",
-                "accept": "application/json",
-            }
-            if guardrails_id:
-                invoke_kw["guardrailIdentifier"] = guardrails_id
-                invoke_kw["guardrailVersion"] = str(body.get("guardrails_version", "DRAFT"))
-            resp = br.invoke_model(**invoke_kw)
-            out = json.loads(resp["body"].read().decode("utf-8"))
-            text = ""
-            for block in out.get("content", []):
-                if block.get("type") == "text":
-                    text += block.get("text", "")
         except Exception as exc:  # noqa: BLE001
             text = f"[bedrock-unavailable] {exc}"
         ddb_client.put_item(
@@ -391,6 +391,9 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 "SK": {"S": f"AUDIT#QUERY#{uuid.uuid4()}"},
                 "kb_id": {"S": kb_id},
                 "question": {"S": question[:2000]},
+                "prompt_sha256": {"S": prompt_sha256},
+                "generation_model_id": {"S": generation_model_id[:2048]},
+                "audit_stub_next": {"S": audit_stub[:256]},
                 **({"guardrails_id": {"S": str(guardrails_id)[:256]}} if guardrails_id else {}),
             },
         )
