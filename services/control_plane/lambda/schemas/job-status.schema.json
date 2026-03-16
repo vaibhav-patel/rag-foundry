@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "rag-foundry:schemas:job-status",
+  "title": "JobStatus",
+  "description": "DynamoDB job item lifecycle for ingest pipeline (backward compatible with existing QUEUED/SUCCEEDED rows).",
+  "type": "string",
+  "enum": ["QUEUED", "RUNNING", "SUCCEEDED", "PARTIAL", "FAILED"]
+}

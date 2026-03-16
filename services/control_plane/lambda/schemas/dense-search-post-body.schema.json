@@ -1,0 +1,12 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rag-foundry/contracts/schemas/dense-search-post-body.schema.json",
+  "title": "DenseSearchPostBody",
+  "type": "object",
+  "allOf": [
+    {
+      "$ref": "https://rag-foundry/contracts/schemas/dense-search-request.fragment.schema.json"
+    }
+  ],
+  "additionalProperties": true
+}

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rag-foundry/contracts/schemas/dense-search-request.fragment.schema.json",
+  "title": "DenseSearchRequestFragment",
+  "type": "object",
+  "properties": {
+    "hybrid": { "type": "boolean", "default": false },
+    "bm25_weight": { "type": "number", "minimum": 0 },
+    "vector_weight": { "type": "number", "minimum": 0 },
+    "q": { "type": "string" },
+    "query_embedding": {
+      "type": "array",
+      "items": { "type": "number" }
+    },
+    "k": { "type": "integer", "minimum": 1, "maximum": 100 },
+    "top_k": { "type": "integer", "minimum": 1, "maximum": 100 },
+    "min_score": { "type": "number" }
+  },
+  "additionalProperties": true
+}
