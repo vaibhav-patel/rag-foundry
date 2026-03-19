@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 import uuid
 from typing import Any
 
@@ -17,13 +18,22 @@ from bedrock_generation import (
     resolve_model_id,
     resolve_temperature,
 )
+from contracts_validate import (
+    DENSE_SEARCH_BODY_SCHEMA_URI,
+    RAG_QUERY_SCHEMA_URI,
+    format_schema_error_response,
+    schema_validation_errors,
+)
 from dense_search import parse_knn_k, run_dense_search
+from guardrails_resolve import load_tenant_settings_item, resolve_guardrail_config
 from job_status import (
     JOB_GSI1_PARTITION_PK,
     JOB_STATUS_QUEUE,
     gsi_sort_key_for_tenant_job,
     job_item_to_api_body,
 )
+from query_audit import build_query_audit_item
+from quota import try_consume_request_quota
 from rag_context import format_rag_context, parse_context_char_budget, parse_context_k
 from rerank_hook import dense_search_fetch_size, rerank_dense_hits_maybe
 
@@ -41,6 +51,34 @@ def _json_response(status: int, body: dict[str, Any]) -> dict[str, Any]:
         "headers": {"content-type": "application/json"},
         "body": json.dumps(body),
     }
+
+
+def _parse_json_object(raw: str | None, *, endpoint: str) -> tuple[bool, dict[str, Any], dict]:
+    """Return ``(ok, body, error_response_payload)``. ``body`` empty dict if malformed."""
+
+    if raw is None or not str(raw).strip():
+        return True, {}, {}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        return (
+            False,
+            {},
+            {
+                "title": "Bad Request",
+                "detail": f"Invalid JSON for {endpoint}: {exc}",
+            },
+        )
+    if not isinstance(data, dict):
+        return (
+            False,
+            {},
+            {
+                "title": "Bad Request",
+                "detail": f"{endpoint} body must be a JSON object",
+            },
+        )
+    return True, data, {}
 
 
 def _claims(event: dict[str, Any]) -> dict[str, str]:
@@ -72,6 +110,20 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     raw_bucket = os.environ["RAW_BUCKET"]
     sm_arn = os.environ.get("STATE_MACHINE_ARN", "")
 
+    tenant_settings: dict[str, Any] | None = None
+    if tenant != "unknown":
+        tenant_settings = load_tenant_settings_item(
+            table=table, tenant_id=tenant, ddb=ddb_client
+        )
+        quota_err = try_consume_request_quota(
+            ddb=ddb_client,
+            table=table,
+            tenant_id=tenant,
+            settings=tenant_settings,
+        )
+        if quota_err is not None:
+            return _json_response(429, quota_err)
+
     if path == "/v1/tenants" and method == "GET":
         return _json_response(200, {"items": [{"id": tenant, "name": tenant}]})
 
@@ -79,19 +131,27 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     if path == "/v1/kbs" and method == "POST":
         body = json.loads(event.get("body") or "{}")
         kb_id = str(uuid.uuid4())
-        ddb_client.put_item(
-            TableName=table,
-            Item={
-                "PK": {"S": f"TENANT#{tenant}"},
-                "SK": {"S": f"KB#{kb_id}"},
-                "GSI1PK": {"S": f"KB#{kb_id}"},
-                "GSI1SK": {"S": f"TENANT#{tenant}"},
-                "name": {"S": body.get("name", "kb")},
-                "embedding_model_id": {
-                    "S": body.get("embedding_model_id", "amazon.titan-embed-text-v1")
-                },
+        item: dict[str, Any] = {
+            "PK": {"S": f"TENANT#{tenant}"},
+            "SK": {"S": f"KB#{kb_id}"},
+            "GSI1PK": {"S": f"KB#{kb_id}"},
+            "GSI1SK": {"S": f"TENANT#{tenant}"},
+            "name": {"S": body.get("name", "kb")},
+            "embedding_model_id": {
+                "S": body.get("embedding_model_id", "amazon.titan-embed-text-v1")
             },
-        )
+        }
+        gid = str(
+            body.get("bedrock_guardrail_id") or body.get("guardrailIdentifier") or "",
+        ).strip()
+        gver = str(
+            body.get("bedrock_guardrail_version") or body.get("guardrailVersion") or "",
+        ).strip()
+        if gid:
+            item["bedrock_guardrail_id"] = {"S": gid[:512]}
+            if gver:
+                item["bedrock_guardrail_version"] = {"S": gver[:64]}
+        ddb_client.put_item(TableName=table, Item=item)
         return _json_response(201, {"id": kb_id, "tenant_id": tenant})
 
     if path == "/v1/kbs" and method == "GET":
@@ -283,7 +343,12 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     m_search = re.fullmatch(r"/v1/kbs/([^/]+)/search", path)
     if m_search and method == "POST":
         kb_id = m_search.group(1)
-        body = json.loads(event.get("body") or "{}")
+        parsed_ok, body, j_err = _parse_json_object(event.get("body"), endpoint="/search")
+        if not parsed_ok:
+            return _json_response(400, j_err)
+        errs = schema_validation_errors(DENSE_SEARCH_BODY_SCHEMA_URI, body)
+        if errs:
+            return _json_response(400, format_schema_error_response(errs))
         g = ddb_client.get_item(
             TableName=table,
             Key={"PK": {"S": f"TENANT#{tenant}"}, "SK": {"S": f"KB#{kb_id}"}},
@@ -316,15 +381,29 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     m_query = re.fullmatch(r"/v1/kbs/([^/]+)/query", path)
     if m_query and method == "POST":
         kb_id = m_query.group(1)
-        body = json.loads(event.get("body") or "{}")
-        question = str(body.get("question", "") or "")
-        guardrails_id = body.get("guardrails_id") or os.environ.get("BEDROCK_GUARDRAILS_ID", "")
+        parsed_ok, body, j_err = _parse_json_object(event.get("body"), endpoint="/query")
+        if not parsed_ok:
+            return _json_response(400, j_err)
+        errs = schema_validation_errors(RAG_QUERY_SCHEMA_URI, body)
+        if errs:
+            return _json_response(400, format_schema_error_response(errs))
+        question = str(body.get("question", "") or "").strip()
         g_kb = ddb_client.get_item(
             TableName=table,
             Key={"PK": {"S": f"TENANT#{tenant}"}, "SK": {"S": f"KB#{kb_id}"}},
         )
         if "Item" not in g_kb or g_kb["Item"].get("GSI1SK", {}).get("S") != f"TENANT#{tenant}":
             return _json_response(403, {"title": "Forbidden", "detail": "Invalid KB"})
+        ts_guard = tenant_settings
+        if tenant == "unknown":
+            ts_guard = load_tenant_settings_item(
+                table=table, tenant_id=tenant, ddb=ddb_client
+            )
+        guard_gid, guard_ver = resolve_guardrail_config(
+            body=body,
+            kb_item=g_kb.get("Item"),
+            tenant_settings_item=ts_guard,
+        )
 
         search_mode = os.environ.get("SEARCH_MODE", "stub")
         ctx_k = parse_context_k(body)
@@ -369,8 +448,8 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         generation_model_id = resolve_model_id(body.get("model_id"))
         prompt_sha256 = canonical_prompt_sha256(system_prompt, user_message)
         audit_stub = audit_extension_stub()
-        guard_ver = str(body.get("guardrails_version", "DRAFT"))
 
+        t_gen0 = time.perf_counter()
         try:
             text = generate_with_converse(
                 br,
@@ -379,23 +458,29 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 user_text=user_message,
                 max_tokens=resolve_max_tokens(),
                 temperature=resolve_temperature(),
-                guardrail_id=guardrails_id if guardrails_id else None,
-                guardrail_version=guard_ver,
+                guardrail_id=guard_gid,
+                guardrail_version=guard_ver or "DRAFT",
             )
         except Exception as exc:  # noqa: BLE001
             text = f"[bedrock-unavailable] {exc}"
+        latency_ms = (time.perf_counter() - t_gen0) * 1000.0
+        hit_ids = [str(c.get("id", "") or "") for c in citations if c.get("id")]
+
         ddb_client.put_item(
             TableName=table,
-            Item={
-                "PK": {"S": f"TENANT#{tenant}"},
-                "SK": {"S": f"AUDIT#QUERY#{uuid.uuid4()}"},
-                "kb_id": {"S": kb_id},
-                "question": {"S": question[:2000]},
-                "prompt_sha256": {"S": prompt_sha256},
-                "generation_model_id": {"S": generation_model_id[:2048]},
-                "audit_stub_next": {"S": audit_stub[:256]},
-                **({"guardrails_id": {"S": str(guardrails_id)[:256]}} if guardrails_id else {}),
-            },
+            Item=build_query_audit_item(
+                tenant_id=tenant,
+                kb_id=kb_id,
+                question=question,
+                answer_text=text,
+                model_id=generation_model_id,
+                latency_ms=latency_ms,
+                hit_ids=hit_ids,
+                prompt_sha256=prompt_sha256,
+                audit_stub=audit_stub,
+                guardrails_id=guard_gid,
+                guardrails_version=guard_ver if guard_gid else None,
+            ),
         )
         return _json_response(
             200,
@@ -403,7 +488,7 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 "answer": text,
                 "citations": citations,
                 "kb_id": kb_id,
-                "guardrails_applied": bool(guardrails_id),
+                "guardrails_applied": bool(guard_gid),
             },
         )
 

@@ -9,6 +9,7 @@ os.environ.setdefault("TABLE_NAME", "t")
 os.environ.setdefault("RAW_BUCKET", "b")
 os.environ.setdefault("ARTIFACTS_BUCKET", "a")
 os.environ.setdefault("STATE_MACHINE_ARN", "")
+os.environ.setdefault("TENANT_REQUESTS_PER_DAY", "0")
 
 from importlib.util import module_from_spec, spec_from_file_location
 

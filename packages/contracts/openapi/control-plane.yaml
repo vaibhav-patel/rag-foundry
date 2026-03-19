@@ -13,9 +13,33 @@ paths:
     get:
       summary: List knowledge bases
       security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: KB list for the authenticated tenant
+        "429":
+          description: Per-tenant daily API request quota exceeded (UTC day; see SETTINGS#tenant overrides)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DailyQuotaExceeded"
     post:
       summary: Create knowledge base
       security: [{ bearerAuth: [] }]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/KnowledgeBaseCreate"
+      responses:
+        "201":
+          description: KB created
+        "429":
+          description: Per-tenant daily API request quota exceeded (UTC day)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DailyQuotaExceeded"
   /v1/kbs/{kbId}/query:
     post:
       summary: RAG query — dense retrieval + bounded context + Bedrock generation (+ audit)
@@ -40,9 +64,21 @@ paths:
               schema:
                 $ref: "#/components/schemas/RagQueryResponse"
         "400":
-          description: Live search prerequisites failed (delegated dense search validation)
+          description: Invalid JSON, non-object body, or JSON Schema validation failure before Bedrock
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/BadRequestInvalidJson"
+                  - $ref: "#/components/schemas/BadRequestSchemaValidation"
         "403":
           description: KB not visible to tenant
+        "429":
+          description: Per-tenant daily API request quota exceeded (UTC day)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DailyQuotaExceeded"
         "502":
           description: OpenSearch/search transport error
         "503":
@@ -71,11 +107,28 @@ paths:
               schema:
                 $ref: "#/components/schemas/DenseSearchResponse"
         "400":
-          description: Invalid body (e.g. live without query_embedding; hybrid=true without q or embedding; both weights 0)
+          description: >
+            Invalid JSON, non-object body, JSON Schema validation failure, or live search rules
+            (e.g. missing query_embedding; hybrid without q/embedding; both weights 0)
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/BadRequestInvalidJson"
+                  - $ref: "#/components/schemas/BadRequestSchemaValidation"
+                  - type: object
+                    description: Dense search semantic errors (problem-like)
+                    additionalProperties: true
         "502":
           description: OpenSearch error
         "503":
           description: Live search but OpenSearch not configured
+        "429":
+          description: Per-tenant daily API request quota exceeded (UTC day)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DailyQuotaExceeded"
   /v1/kbs/{kbId}/uploads:
     post:
       summary: Presigned PUT for raw document
@@ -180,6 +233,76 @@ paths:
       security: [{ bearerAuth: [] }]
 components:
   schemas:
+    BadRequestInvalidJson:
+      type: object
+      description: Malformed JSON or a JSON document that is not an object (400)
+      required: [title, detail]
+      properties:
+        title:
+          type: string
+          example: Bad Request
+        detail:
+          type: string
+    BadRequestSchemaValidation:
+      type: object
+      required: [title, detail, schema_errors]
+      properties:
+        title:
+          type: string
+          example: Bad Request
+        detail:
+          type: string
+          example: Request body failed JSON Schema validation
+        schema_errors:
+          type: array
+          items:
+            type: object
+            required: [message]
+            properties:
+              message:
+                type: string
+    DailyQuotaExceeded:
+      type: object
+      description: >
+        Returned before route logic when the tenant's UTC-day counter (Dynamo ``QUOTA#YYYY-MM-DD``)
+        would exceed the limit. Disable per tenant with ``quota_exempt`` on ``SETTINGS#tenant``, or
+        raise/lower cap with ``requests_per_day_limit`` (N). Lambda env ``TENANT_REQUESTS_PER_DAY``
+        (``0`` disables quotas globally).
+      required: [title, detail, quota_date, limit]
+      properties:
+        title:
+          type: string
+          example: Too Many Requests
+        detail:
+          type: string
+        quota_date:
+          type: string
+          description: UTC calendar date for the quota bucket (YYYY-MM-DD)
+        limit:
+          type: integer
+          minimum: 1
+    KnowledgeBaseCreate:
+      type: object
+      properties:
+        name:
+          type: string
+        embedding_model_id:
+          type: string
+          description: Default embedding model stored on the KB record
+        bedrock_guardrail_id:
+          type: string
+          description: >
+            Optional default Bedrock guardrail identifier for `/v1/kbs/{kbId}/query` when the
+            request does not specify guardrail fields (`guardrails_*` / `guardrailIdentifier`)
+        bedrock_guardrail_version:
+          type: string
+          description: Guardrail version; stored when `bedrock_guardrail_id` is set
+        guardrailIdentifier:
+          type: string
+          description: Alias for `bedrock_guardrail_id`
+        guardrailVersion:
+          type: string
+          description: Alias for `bedrock_guardrail_version`
     JobStatus:
       $ref: "../schemas/job-status.schema.json"
     DenseSearchHit:
@@ -283,15 +406,26 @@ components:
                 and other foundation models exposed for Converse / ConverseStream).
             guardrails_id:
               type: string
-              description: Optional Bedrock guardrail id
+              description: Optional Bedrock guardrail id (highest precedence in the request body)
             guardrails_version:
               type: string
               default: DRAFT
+            guardrailIdentifier:
+              type: string
+              description: Alias for guardrails_id (Bedrock/API naming)
+            guardrailVersion:
+              type: string
+              description: Alias for guardrails_version
       description: >
         Retrieval uses `CONTEXT_CHAR_BUDGET` (default 12000) for joined chunk text cap.
         Generation uses Lambda env `GENERATION_MODEL_ID`, `MAX_TOKENS`, `TEMPERATURE`; optional
-        `QUERY_USE_CONVERSE_STREAM=true` aggregates ConverseStream to a single reply; audit rows
-        store `prompt_sha256`, `generation_model_id`, `audit_stub_next` (QUERY_AUDIT_EXTENSION_STUB).
+        `QUERY_USE_CONVERSE_STREAM=true` aggregates ConverseStream to a single reply. Audit rows use
+        `PK=TENANT#…`, `SK=QUERYAUDIT#<UTC-ISO-ms>#<uuid>` (and sparse GSI `GSIQueryAuditTime` on
+        `GSI2PK=TENANT#…#QUERYAUDIT`, `GSI2SK=<ISO>#<uuid>` for time-range queries). Persisted fields
+        include `question_sha256`, `answer_length`, `model_id`, `latency_ms`, `hit_ids`, `prompt_sha256`,
+        `audit_stub_next` (QUERY_AUDIT_EXTENSION_STUB), optional guardrail keys, and optional `expires_at`
+        (Unix epoch) when Lambda env `QUERY_AUDIT_TTL_DAYS` is a positive integer (table TTL enabled on
+        `expires_at`).
     RagQueryResponse:
       type: object
       required: [answer, citations, kb_id, guardrails_applied]

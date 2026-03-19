@@ -15,6 +15,7 @@ os.environ.setdefault("TABLE_NAME", "t")
 os.environ.setdefault("RAW_BUCKET", "b")
 os.environ.setdefault("ARTIFACTS_BUCKET", "a")
 os.environ.setdefault("STATE_MACHINE_ARN", "")
+os.environ.setdefault("TENANT_REQUESTS_PER_DAY", "0")
 
 _spec_h = spec_from_file_location(
     "cp_handler_query_rag",
@@ -142,6 +143,7 @@ def test_query_stub_injected_hits_calls_converse_and_audits(
     infer = invokes[0]["inferenceConfig"]
     assert infer["maxTokens"] == 512
     assert infer["temperature"] == pytest.approx(0.1)
+    assert "guardrailConfig" not in invokes[0]
 
     assert out["statusCode"] == 200
     body = json.loads(out["body"])
@@ -149,9 +151,140 @@ def test_query_stub_injected_hits_calls_converse_and_audits(
     assert [c["id"] for c in body["citations"]] == ["chunk-alpha", "chunk-beta"]
 
     audit_item = captured_put.call_args[1]["Item"]
+    sk = audit_item["SK"]["S"]
+    assert sk.startswith("QUERYAUDIT#")
+    assert sk.count("#") >= 2
+    assert audit_item["GSI2PK"]["S"] == f"TENANT#{tenant}#QUERYAUDIT"
+    assert sk.removeprefix("QUERYAUDIT#") == audit_item["GSI2SK"]["S"]
+    assert len(audit_item["question_sha256"]["S"]) == 64
+    assert int(audit_item["answer_length"]["N"]) > 0
+    assert audit_item["model_id"]["S"].startswith("anthropic.")
+    assert int(audit_item["latency_ms"]["N"]) >= 0
+    assert len(audit_item["hit_ids"]["L"]) == 2
+    assert {e["S"] for e in audit_item["hit_ids"]["L"]} == {"chunk-alpha", "chunk-beta"}
     assert "prompt_sha256" in audit_item
     assert len(audit_item["prompt_sha256"]["S"]) == 64
-    assert audit_item["generation_model_id"]["S"].startswith("anthropic.")
     assert audit_item["audit_stub_next"]["S"] == "pending-2026-03-16"
 
+    monkeypatch.delenv("RAG_STUB_DENSE_HITS_JSON", raising=False)
+
+
+def test_query_body_guardrail_overrides_kb(monkeypatch: pytest.MonkeyPatch) -> None:
+    tenant = "tenant-gr"
+    kb = "kb-gr"
+    monkeypatch.setenv("SEARCH_MODE", "stub")
+    monkeypatch.setenv(
+        "RAG_STUB_DENSE_HITS_JSON",
+        json.dumps({"hits": [], "total": 0}),
+    )
+    invokes: list[dict] = []
+
+    def _gi(**kwargs: object) -> dict:
+        sk = kwargs["Key"]["SK"]["S"]  # type: ignore[index]
+        if sk == "SETTINGS#tenant":
+            return {}
+        return {
+            "Item": {
+                "PK": {"S": f"TENANT#{tenant}"},
+                "SK": {"S": f"KB#{kb}"},
+                "GSI1SK": {"S": f"TENANT#{tenant}"},
+                "bedrock_guardrail_id": {"S": "kb-guard"},
+                "bedrock_guardrail_version": {"S": "1"},
+            },
+        }
+
+    monkeypatch.setattr(_mod.ddb_client, "get_item", _gi)
+    monkeypatch.setattr(_mod.ddb_client, "put_item", MagicMock())
+
+    mock_br = MagicMock()
+
+    def _converse(**kwargs: object) -> dict:
+        invokes.append(dict(kwargs))
+        return {
+            "output": {
+                "message": {
+                    "role": "assistant",
+                    "content": [{"text": "ok"}],
+                },
+            },
+        }
+
+    mock_br.converse.side_effect = _converse
+
+    def _client(service_name: str, **kw: object) -> object:
+        return mock_br if service_name == "bedrock-runtime" else MagicMock()
+
+    monkeypatch.setattr(boto3, "client", _client)
+
+    ev = {
+        "rawPath": f"/v1/kbs/{kb}/query",
+        "body": json.dumps(
+            {
+                "question": "hello",
+                "guardrails_id": "body-guard",
+                "guardrails_version": "2",
+            },
+        ),
+        "requestContext": {
+            "http": {"method": "POST"},
+            "authorizer": {"jwt": {"claims": {"sub": tenant}}},
+        },
+    }
+    assert _mod.handler(ev, None)["statusCode"] == 200
+    assert invokes[0]["guardrailConfig"]["guardrailIdentifier"] == "body-guard"
+    assert invokes[0]["guardrailConfig"]["guardrailVersion"] == "2"
+    monkeypatch.delenv("RAG_STUB_DENSE_HITS_JSON", raising=False)
+
+
+def test_query_kb_guardrail_used_when_absent_from_body(monkeypatch: pytest.MonkeyPatch) -> None:
+    tenant = "tenant-kb-gr"
+    kb = "kb-kb-gr"
+    monkeypatch.setenv("SEARCH_MODE", "stub")
+    monkeypatch.delenv("BEDROCK_GUARDRAILS_ID", raising=False)
+    monkeypatch.delenv("BEDROCK_GUARDRAILS_VERSION", raising=False)
+    monkeypatch.setenv(
+        "RAG_STUB_DENSE_HITS_JSON",
+        json.dumps({"hits": [], "total": 0}),
+    )
+    invokes: list[dict] = []
+
+    def _gi(**kwargs: object) -> dict:
+        sk = kwargs["Key"]["SK"]["S"]  # type: ignore[index]
+        if sk == "SETTINGS#tenant":
+            return {}
+        return {
+            "Item": {
+                "PK": {"S": f"TENANT#{tenant}"},
+                "SK": {"S": f"KB#{kb}"},
+                "GSI1SK": {"S": f"TENANT#{tenant}"},
+                "bedrock_guardrail_id": {"S": "kb-only"},
+                "bedrock_guardrail_version": {"S": ""},
+            },
+        }
+
+    monkeypatch.setattr(_mod.ddb_client, "get_item", _gi)
+    monkeypatch.setattr(_mod.ddb_client, "put_item", MagicMock())
+
+    mock_br = MagicMock()
+
+    mock_br.converse.side_effect = lambda **kw: invokes.append(dict(kw)) or {
+        "output": {"message": {"role": "assistant", "content": [{"text": "x"}]}},
+    }
+
+    def _boto(name: str, **k: object) -> object:
+        return mock_br if name == "bedrock-runtime" else MagicMock()
+
+    monkeypatch.setattr(boto3, "client", _boto)
+
+    ev = {
+        "rawPath": f"/v1/kbs/{kb}/query",
+        "body": json.dumps({"question": "hi"}),
+        "requestContext": {
+            "http": {"method": "POST"},
+            "authorizer": {"jwt": {"claims": {"sub": tenant}}},
+        },
+    }
+    assert _mod.handler(ev, None)["statusCode"] == 200
+    assert invokes[0]["guardrailConfig"]["guardrailIdentifier"] == "kb-only"
+    assert invokes[0]["guardrailConfig"]["guardrailVersion"] == "DRAFT"
     monkeypatch.delenv("RAG_STUB_DENSE_HITS_JSON", raising=False)

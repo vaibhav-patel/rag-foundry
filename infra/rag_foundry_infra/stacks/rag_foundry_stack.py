@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from typing import Any, cast
 
 from aws_cdk import (
     BundlingOptions,
+    CfnJson,
     CfnOutput,
     Duration,
     RemovalPolicy,
@@ -34,6 +36,23 @@ from constructs import Construct
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 
+# HTTP API $default stage per-route throttles (see ``docs/ux/limits.md``).
+_HTTP_THROTTLE_QUERY_RPS = 20
+_HTTP_THROTTLE_QUERY_BURST = 40
+_HTTP_THROTTLE_SEARCH_RPS = 60
+_HTTP_THROTTLE_SEARCH_BURST = 120
+
+
+def _optional_positive_int_from_context(scope: Construct, key: str) -> int | None:
+    raw = scope.node.try_get_context(key)
+    if raw is None or raw == "":
+        return None
+    try:
+        v = int(str(raw).strip(), 10)
+    except ValueError:
+        return None
+    return v if v > 0 else None
+
 
 def _bundled_lambda_code(repo_root: Path, rel_lambda_dir: str) -> lambda_.Code:
     """Install requirements.txt alongside *.py into the Lambda asset (Docker bundling).
@@ -59,7 +78,10 @@ def _bundled_lambda_code(repo_root: Path, rel_lambda_dir: str) -> lambda_.Code:
                 "-c",
                 "pip install --no-cache-dir -r requirements.txt -t /asset-output "
                 "&& cp -v ./*.py /asset-output/ "
-                '&& for f in ./*.json; do [ -f "$f" ] && cp -v "$f" /asset-output/; done',
+                '&& for f in ./*.json; do [ -f "$f" ] && cp -v "$f" /asset-output/; done '
+                "&& mkdir -p /asset-output/schemas "
+                '&& for f in ./schemas/*.json; do [ -f "$f" ] '
+                '&& cp -v "$f" /asset-output/schemas/; done',
             ],
         ),
     )
@@ -131,6 +153,18 @@ class RagFoundryStack(Stack):
             partition_key=dynamodb.Attribute(name="GSI1PK", type=dynamodb.AttributeType.STRING),
             sort_key=dynamodb.Attribute(name="GSI1SK", type=dynamodb.AttributeType.STRING),
         )
+        table.add_global_secondary_index(
+            index_name="GSIQueryAuditTime",
+            partition_key=dynamodb.Attribute(name="GSI2PK", type=dynamodb.AttributeType.STRING),
+            sort_key=dynamodb.Attribute(name="GSI2SK", type=dynamodb.AttributeType.STRING),
+            projection_type=dynamodb.ProjectionType.ALL,
+        )
+
+        cfn_table = cast(dynamodb.CfnTable, table.node.default_child)
+        cfn_table.time_to_live_specification = dynamodb.CfnTable.TimeToLiveSpecificationProperty(
+            attribute_name="expires_at",
+            enabled=True,
+        )
 
         dlq = sqs.Queue(self, "IngestDLQ", retention_period=Duration.days(14))
         ops_topic = sns.Topic(self, "OpsTopic", display_name="rag-foundry-ops")
@@ -165,22 +199,26 @@ class RagFoundryStack(Stack):
             retention=logs.RetentionDays.TWO_WEEKS,
             removal_policy=RemovalPolicy.DESTROY,
         )
-        api_lambda = lambda_.Function(
-            self,
-            "ControlPlaneFn",
-            runtime=lambda_.Runtime.PYTHON_3_12,  # Lambda runtime (not local Python version)
-            handler="handler.handler",
-            code=_bundled_lambda_code(_REPO_ROOT, "services/control_plane/lambda"),
-            timeout=Duration.seconds(29),
-            memory_size=512,
-            environment={
+        _cp_reserved = _optional_positive_int_from_context(self, "controlPlaneReservedConcurrency")
+        _api_fn_props: dict[str, Any] = {
+            "runtime": lambda_.Runtime.PYTHON_3_12,  # Lambda runtime (not local Python version)
+            "handler": "handler.handler",
+            "code": _bundled_lambda_code(_REPO_ROOT, "services/control_plane/lambda"),
+            "timeout": Duration.seconds(29),
+            "memory_size": 512,
+            "environment": {
                 "TABLE_NAME": table.table_name,
                 "RAW_BUCKET": raw_bucket.bucket_name,
                 "ARTIFACTS_BUCKET": artifacts_bucket.bucket_name,
                 "BUILD_VERSION": "0.1.0",
+                # Per-tenant daily cap (UTC); ``0`` disables. Override per tenant via SETTINGS#tenant.
+                "TENANT_REQUESTS_PER_DAY": "100000",
             },
-            log_group=api_logs,
-        )
+            "log_group": api_logs,
+        }
+        if _cp_reserved is not None:
+            _api_fn_props["reserved_concurrent_executions"] = _cp_reserved
+        api_lambda = lambda_.Function(self, "ControlPlaneFn", **_api_fn_props)
         table.grant_read_write_data(api_lambda)
         raw_bucket.grant_read_write(api_lambda)
         artifacts_bucket.grant_read_write(api_lambda)
@@ -191,20 +229,22 @@ class RagFoundryStack(Stack):
             retention=logs.RetentionDays.TWO_WEEKS,
             removal_policy=RemovalPolicy.DESTROY,
         )
-        worker_lambda = lambda_.Function(
-            self,
-            "WorkerFn",
-            runtime=lambda_.Runtime.PYTHON_3_12,
-            handler="handler.handler",
-            code=_bundled_lambda_code(_REPO_ROOT, "services/workers/lambda_stub"),
-            timeout=Duration.minutes(5),
-            memory_size=1024,
-            environment={
+        _wk_reserved = _optional_positive_int_from_context(self, "workerReservedConcurrency")
+        _wk_fn_props: dict[str, Any] = {
+            "runtime": lambda_.Runtime.PYTHON_3_12,
+            "handler": "handler.handler",
+            "code": _bundled_lambda_code(_REPO_ROOT, "services/workers/lambda_stub"),
+            "timeout": Duration.minutes(5),
+            "memory_size": 1024,
+            "environment": {
                 "RAW_BUCKET": raw_bucket.bucket_name,
                 "TABLE_NAME": table.table_name,
             },
-            log_group=worker_logs,
-        )
+            "log_group": worker_logs,
+        }
+        if _wk_reserved is not None:
+            _wk_fn_props["reserved_concurrent_executions"] = _wk_reserved
+        worker_lambda = lambda_.Function(self, "WorkerFn", **_wk_fn_props)
         raw_bucket.grant_read_write(worker_lambda)
         table.grant_read_write_data(worker_lambda)
 
@@ -421,12 +461,44 @@ class RagFoundryStack(Stack):
             methods=[apigwv2.HttpMethod.GET],
             integration=integration,
         )
+        routes_query = http_api.add_routes(
+            path="/v1/kbs/{kbId}/query",
+            methods=[apigwv2.HttpMethod.POST],
+            integration=integration,
+            authorizer=jwt_authorizer,
+        )
+        routes_search = http_api.add_routes(
+            path="/v1/kbs/{kbId}/search",
+            methods=[apigwv2.HttpMethod.POST],
+            integration=integration,
+            authorizer=jwt_authorizer,
+        )
         http_api.add_routes(
             path="/v1/{proxy+}",
             methods=[apigwv2.HttpMethod.ANY],
             integration=integration,
             authorizer=jwt_authorizer,
         )
+
+        # Per-route throttles on the auto-created ``$default`` stage (HTTP API v2).
+        # Route IDs are CloudFormation refs; use CfnJson so token keys resolve at deploy time.
+        if http_api.default_stage is not None:
+            cfn_stage = cast(apigwv2.CfnStage, http_api.default_stage.node.default_child)
+            route_throttle = CfnJson(
+                self,
+                "HttpApiQuerySearchRouteThrottleSettings",
+                value={
+                    routes_query[0].route_id: {
+                        "ThrottlingRateLimit": _HTTP_THROTTLE_QUERY_RPS,
+                        "ThrottlingBurstLimit": _HTTP_THROTTLE_QUERY_BURST,
+                    },
+                    routes_search[0].route_id: {
+                        "ThrottlingRateLimit": _HTTP_THROTTLE_SEARCH_RPS,
+                        "ThrottlingBurstLimit": _HTTP_THROTTLE_SEARCH_BURST,
+                    },
+                },
+            )
+            cfn_stage.route_settings = route_throttle
 
         ssm.StringParameter(
             self,
