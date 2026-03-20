@@ -61,3 +61,21 @@ jobs:
           CDK_DEFAULT_ACCOUNT: "000000000000"
           CDK_DEFAULT_REGION: us-east-1
         run: cd infra && python3 app.py
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: Install web deps
+        run: npm ci --prefix web
+      - name: Regenerate OpenAPI types
+        run: npm run generate --prefix web
+      - name: Fail on generated drift
+        run: git diff --exit-code
+      - name: Typecheck and build
+        run: npm run build --prefix web

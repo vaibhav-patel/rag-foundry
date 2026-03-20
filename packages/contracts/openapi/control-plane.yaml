@@ -318,7 +318,7 @@ components:
           description: kNN relevance score (`_score`)
         text:
           type: string
-          description: `chunk_text` field
+          description: "chunk_text field (OpenSearch document column)"
         metadata:
           type: object
           additionalProperties: true

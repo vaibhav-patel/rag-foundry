@@ -1,38 +1,32 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useState } from "react";
+import { authHeaders, fetchKnowledgeBaseList, type KnowledgeBaseListJson } from "../api";
+import { denseSearchBody, ragQueryBody, type DenseSearchResponse, type RagQueryResponse } from "../api/payloads";
 
 const api = import.meta.env.VITE_API_URL ?? "";
 const token = import.meta.env.VITE_JWT_TOKEN ?? "";
 
-async function listKbs(): Promise<{ items: { id: string; name: string }[] }> {
-  const r = await fetch(`${api}/v1/kbs`, {
-    headers: { Authorization: `Bearer ${token}` },
-  });
-  if (!r.ok) throw new Error(`kbs ${r.status}`);
-  return r.json();
-}
-
-async function searchKb(kbId: string, q: string) {
+async function searchKb(kbId: string, body: ReturnType<typeof denseSearchBody>): Promise<DenseSearchResponse> {
   const r = await fetch(`${api}/v1/kbs/${kbId}/search`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${token}`,
+      ...authHeaders(),
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ q, top_k: 5 }),
+    body: JSON.stringify(body),
   });
   if (!r.ok) throw new Error(`search ${r.status}`);
   return r.json();
 }
 
-async function queryKb(kbId: string, question: string) {
+async function queryKb(kbId: string, body: ReturnType<typeof ragQueryBody>): Promise<RagQueryResponse> {
   const r = await fetch(`${api}/v1/kbs/${kbId}/query`, {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${token}`,
+      ...authHeaders(),
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ question }),
+    body: JSON.stringify(body),
   });
   if (!r.ok) throw new Error(`query ${r.status}`);
   return r.json();
@@ -42,9 +36,17 @@ export function Playground() {
   const [kbId, setKbId] = useState("");
   const [q, setQ] = useState("hello");
   const [question, setQuestion] = useState("What is this KB about?");
-  const kbs = useQuery({ queryKey: ["kbs"], queryFn: listKbs, enabled: Boolean(token && api) });
-  const searchMut = useMutation({ mutationFn: () => searchKb(kbId, q) });
-  const queryMut = useMutation({ mutationFn: () => queryKb(kbId, question) });
+  const kbs = useQuery<KnowledgeBaseListJson>({
+    queryKey: ["kbs"],
+    queryFn: fetchKnowledgeBaseList,
+    enabled: Boolean(token && api),
+  });
+  const searchMut = useMutation({
+    mutationFn: () => searchKb(kbId, denseSearchBody({ q, k: 5 })),
+  });
+  const queryMut = useMutation({
+    mutationFn: () => queryKb(kbId, ragQueryBody(question)),
+  });
 
   if (!api || !token) {
     return (

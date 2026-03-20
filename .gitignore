@@ -21,6 +21,7 @@ cdk.out/
 # Node / web
 web/node_modules/
 web/dist/
+web/tsconfig.tsbuildinfo
 web/.env
 web/.env.*
 
