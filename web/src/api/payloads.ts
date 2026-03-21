@@ -1,6 +1,9 @@
 import type { components, paths } from "./types";
 
 export type KnowledgeBaseCreate = components["schemas"]["KnowledgeBaseCreate"];
+export type KnowledgeBasePatch = components["schemas"]["KnowledgeBasePatch"];
+export type KnowledgeBase = components["schemas"]["KnowledgeBase"];
+export type KnowledgeBaseMutation = components["schemas"]["knowledge-base-mutation.schema"];
 export type DenseSearchRequest = components["schemas"]["DenseSearchRequest"];
 export type RagQueryRequest = components["schemas"]["RagQueryRequest"];
 export type DenseSearchResponse = components["schemas"]["DenseSearchResponse"];

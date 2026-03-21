@@ -48,6 +48,7 @@ def _validator_for(want_uri: str) -> Draft202012Validator:
 
 RAG_QUERY_SCHEMA_URI = "https://rag-foundry/contracts/schemas/rag-query-request.schema.json"
 DENSE_SEARCH_BODY_SCHEMA_URI = "https://rag-foundry/contracts/schemas/dense-search-post-body.schema.json"
+KB_MUTATION_SCHEMA_URI = "https://rag-foundry/contracts/schemas/knowledge-base-mutation.schema.json"
 
 
 def schema_validation_errors(schema_uri_root_id: str, instance: dict[str, Any]) -> list[str]:

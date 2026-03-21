@@ -1,0 +1,52 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rag-foundry/contracts/schemas/knowledge-base-mutation.schema.json",
+  "title": "KnowledgeBaseMutation",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 256
+    },
+    "embedding_model_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "chunk_chars": {
+      "type": "integer",
+      "minimum": 256,
+      "maximum": 65536
+    },
+    "hybrid": {
+      "type": "boolean"
+    },
+    "generation_model_id": {
+      "type": "string",
+      "minLength": 0,
+      "maxLength": 512
+    },
+    "bedrock_guardrail_id": {
+      "type": "string",
+      "minLength": 0,
+      "maxLength": 512
+    },
+    "bedrock_guardrail_version": {
+      "type": "string",
+      "minLength": 0,
+      "maxLength": 64
+    },
+    "guardrailIdentifier": {
+      "type": "string",
+      "minLength": 0,
+      "maxLength": 512
+    },
+    "guardrailVersion": {
+      "type": "string",
+      "minLength": 0,
+      "maxLength": 64
+    }
+  }
+}

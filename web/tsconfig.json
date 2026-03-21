@@ -6,7 +6,12 @@
     "module": "ESNext",
     "skipLibCheck": true,
     "moduleResolution": "bundler",
+    "resolveJsonModule": true,
     "strict": true,
+    "baseUrl": ".",
+    "paths": {
+      "@contracts/*": ["../packages/contracts/*"]
+    },
     "jsx": "react-jsx",
     "noEmit": true,
     "types": ["vite/client"]

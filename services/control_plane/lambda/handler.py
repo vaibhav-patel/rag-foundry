@@ -20,6 +20,7 @@ from bedrock_generation import (
 )
 from contracts_validate import (
     DENSE_SEARCH_BODY_SCHEMA_URI,
+    KB_MUTATION_SCHEMA_URI,
     RAG_QUERY_SCHEMA_URI,
     format_schema_error_response,
     schema_validation_errors,
@@ -93,6 +94,131 @@ def _tenant_id(claims: dict[str, str]) -> str:
     return claims.get("custom:tenant_id") or claims.get("sub", "unknown")
 
 
+def _kb_item_to_json(it: dict[str, Any], kb_id: str) -> dict[str, Any]:
+    """Project a DynamoDB KB item to the control-plane JSON shape."""
+
+    out: dict[str, Any] = {
+        "id": kb_id,
+        "name": it.get("name", {}).get("S", ""),
+        "embedding_model_id": it.get("embedding_model_id", {}).get("S", ""),
+    }
+    cc = it.get("chunk_chars", {}).get("N")
+    if cc is not None:
+        try:
+            out["chunk_chars"] = int(float(cc))
+        except (TypeError, ValueError):
+            pass
+    if "hybrid" in it and "BOOL" in it["hybrid"]:
+        out["hybrid"] = bool(it["hybrid"]["BOOL"])
+    gen = it.get("generation_model_id", {}).get("S")
+    if gen:
+        out["generation_model_id"] = gen
+    gid = it.get("bedrock_guardrail_id", {}).get("S")
+    gver = it.get("bedrock_guardrail_version", {}).get("S")
+    if gid:
+        out["bedrock_guardrail_id"] = gid
+    if gver:
+        out["bedrock_guardrail_version"] = gver
+    return out
+
+
+def _kb_put_item_from_body(
+    *,
+    tenant: str,
+    kb_id: str,
+    body: dict[str, Any],
+) -> dict[str, Any]:
+    """Build DynamoDB PutItem map for a KB row from a validated mutation body (POST defaults)."""
+
+    name = str(body.get("name") or "kb")[:256]
+    emb = str(body.get("embedding_model_id") or "amazon.titan-embed-text-v1")[:512]
+    item: dict[str, Any] = {
+        "PK": {"S": f"TENANT#{tenant}"},
+        "SK": {"S": f"KB#{kb_id}"},
+        "GSI1PK": {"S": f"KB#{kb_id}"},
+        "GSI1SK": {"S": f"TENANT#{tenant}"},
+        "name": {"S": name},
+        "embedding_model_id": {"S": emb},
+    }
+    if "chunk_chars" in body:
+        item["chunk_chars"] = {"N": str(int(body["chunk_chars"]))}
+    if "hybrid" in body:
+        item["hybrid"] = {"BOOL": bool(body["hybrid"])}
+    gen_raw = str(body.get("generation_model_id") or "").strip()
+    if gen_raw:
+        item["generation_model_id"] = {"S": gen_raw[:512]}
+    gid = str(
+        body.get("bedrock_guardrail_id") or body.get("guardrailIdentifier") or "",
+    ).strip()
+    gver = str(
+        body.get("bedrock_guardrail_version") or body.get("guardrailVersion") or "",
+    ).strip()
+    if gid:
+        item["bedrock_guardrail_id"] = {"S": gid[:512]}
+        if gver:
+            item["bedrock_guardrail_version"] = {"S": gver[:64]}
+    return item
+
+
+def _kb_apply_patch(existing: dict[str, Any], patch: dict[str, Any]) -> dict[str, Any]:
+    """Merge validated PATCH body onto an existing KB JSON dict (from _kb_item_to_json)."""
+
+    out = {**existing}
+    for key in ("name", "embedding_model_id", "chunk_chars", "hybrid"):
+        if key in patch:
+            out[key] = patch[key]
+    if "generation_model_id" in patch:
+        gv = str(patch.get("generation_model_id") or "").strip()
+        out["generation_model_id"] = gv if gv else None
+    id_touched = "bedrock_guardrail_id" in patch or "guardrailIdentifier" in patch
+    ver_touched = "bedrock_guardrail_version" in patch or "guardrailVersion" in patch
+    if id_touched:
+        gid = str(
+            patch.get("bedrock_guardrail_id") or patch.get("guardrailIdentifier") or "",
+        ).strip()
+        if gid:
+            out["bedrock_guardrail_id"] = gid[:512]
+            if ver_touched:
+                gv = str(
+                    patch.get("bedrock_guardrail_version") or patch.get("guardrailVersion") or "",
+                ).strip()
+                out["bedrock_guardrail_version"] = gv[:64] if gv else None
+            elif not out.get("bedrock_guardrail_version"):
+                out["bedrock_guardrail_version"] = None
+        else:
+            out["bedrock_guardrail_id"] = None
+            out["bedrock_guardrail_version"] = None
+    elif ver_touched and out.get("bedrock_guardrail_id"):
+        gv = str(
+            patch.get("bedrock_guardrail_version") or patch.get("guardrailVersion") or "",
+        ).strip()
+        out["bedrock_guardrail_version"] = gv[:64] if gv else None
+    return out
+
+
+def _kb_json_to_put_item(tenant: str, merged: dict[str, Any]) -> dict[str, Any]:
+    """Convert merged KB JSON (with id) into a DynamoDB item for put_item."""
+
+    kb_id = str(merged["id"])
+    body: dict[str, Any] = {
+        "name": merged.get("name") or "kb",
+        "embedding_model_id": merged.get("embedding_model_id") or "amazon.titan-embed-text-v1",
+    }
+    if "chunk_chars" in merged and merged["chunk_chars"] is not None:
+        body["chunk_chars"] = int(merged["chunk_chars"])
+    if "hybrid" in merged:
+        body["hybrid"] = bool(merged["hybrid"])
+    if "generation_model_id" in merged:
+        gv = str(merged.get("generation_model_id") or "").strip()
+        if gv:
+            body["generation_model_id"] = gv
+    if merged.get("bedrock_guardrail_id"):
+        body["bedrock_guardrail_id"] = str(merged["bedrock_guardrail_id"])
+        if merged.get("bedrock_guardrail_version"):
+            body["bedrock_guardrail_version"] = str(merged["bedrock_guardrail_version"])
+    return _kb_put_item_from_body(tenant=tenant, kb_id=kb_id, body=body)
+
+
 def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
     path = event.get("rawPath") or "/"
     method = (event.get("requestContext") or {}).get("http", {}).get("method", "GET").upper()
@@ -129,28 +255,14 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
 
     m_kb = re.fullmatch(r"/v1/kbs/([^/]+)", path)
     if path == "/v1/kbs" and method == "POST":
-        body = json.loads(event.get("body") or "{}")
+        ok, body, err = _parse_json_object(event.get("body"), endpoint="POST /v1/kbs")
+        if not ok:
+            return _json_response(400, err)
+        v_errs = schema_validation_errors(KB_MUTATION_SCHEMA_URI, body)
+        if v_errs:
+            return _json_response(400, format_schema_error_response(v_errs))
         kb_id = str(uuid.uuid4())
-        item: dict[str, Any] = {
-            "PK": {"S": f"TENANT#{tenant}"},
-            "SK": {"S": f"KB#{kb_id}"},
-            "GSI1PK": {"S": f"KB#{kb_id}"},
-            "GSI1SK": {"S": f"TENANT#{tenant}"},
-            "name": {"S": body.get("name", "kb")},
-            "embedding_model_id": {
-                "S": body.get("embedding_model_id", "amazon.titan-embed-text-v1")
-            },
-        }
-        gid = str(
-            body.get("bedrock_guardrail_id") or body.get("guardrailIdentifier") or "",
-        ).strip()
-        gver = str(
-            body.get("bedrock_guardrail_version") or body.get("guardrailVersion") or "",
-        ).strip()
-        if gid:
-            item["bedrock_guardrail_id"] = {"S": gid[:512]}
-            if gver:
-                item["bedrock_guardrail_version"] = {"S": gver[:64]}
+        item = _kb_put_item_from_body(tenant=tenant, kb_id=kb_id, body=body)
         ddb_client.put_item(TableName=table, Item=item)
         return _json_response(201, {"id": kb_id, "tenant_id": tenant})
 
@@ -183,14 +295,35 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
         it = g["Item"]
         if it.get("GSI1SK", {}).get("S") != f"TENANT#{tenant}":
             return _json_response(403, {"title": "Forbidden", "detail": "Tenant mismatch"})
-        return _json_response(
-            200,
-            {
-                "id": kb_id,
-                "name": it.get("name", {}).get("S", ""),
-                "embedding_model_id": it.get("embedding_model_id", {}).get("S", ""),
-            },
+        return _json_response(200, _kb_item_to_json(it, kb_id))
+
+    if m_kb and method == "PATCH":
+        kb_id = m_kb.group(1)
+        ok, body, err = _parse_json_object(event.get("body"), endpoint="PATCH /v1/kbs/{kbId}")
+        if not ok:
+            return _json_response(400, err)
+        if not body:
+            return _json_response(
+                400,
+                {"title": "Bad Request", "detail": "PATCH body must include at least one field"},
+            )
+        v_errs = schema_validation_errors(KB_MUTATION_SCHEMA_URI, body)
+        if v_errs:
+            return _json_response(400, format_schema_error_response(v_errs))
+        g = ddb_client.get_item(
+            TableName=table,
+            Key={"PK": {"S": f"TENANT#{tenant}"}, "SK": {"S": f"KB#{kb_id}"}},
         )
+        if "Item" not in g:
+            return _json_response(404, {"title": "Not found", "detail": "KB not found"})
+        it = g["Item"]
+        if it.get("GSI1SK", {}).get("S") != f"TENANT#{tenant}":
+            return _json_response(403, {"title": "Forbidden", "detail": "Tenant mismatch"})
+        cur = _kb_item_to_json(it, kb_id)
+        merged = _kb_apply_patch(cur, body)
+        item = _kb_json_to_put_item(tenant, merged)
+        ddb_client.put_item(TableName=table, Item=item)
+        return _json_response(200, merged)
 
     m_upload = re.fullmatch(r"/v1/kbs/([^/]+)/uploads", path)
     if m_upload and method == "POST":
@@ -251,13 +384,21 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
                 "status": {"S": JOB_STATUS_QUEUE},
             },
         )
+        kb_item = g["Item"]
+        default_chars = 1200
+        cc_attr = kb_item.get("chunk_chars", {}).get("N")
+        if cc_attr is not None:
+            try:
+                default_chars = int(float(cc_attr))
+            except (TypeError, ValueError):
+                default_chars = 1200
         payload = {
             "tenant": tenant,
             "kb_id": kb_id,
             "job_id": job_id,
             "s3_key": s3_key,
             "embedding_model_id": resolved_embed,
-            "chunk_chars": int(body.get("chunk_chars", 1200)),
+            "chunk_chars": int(body.get("chunk_chars", default_chars)),
         }
         sfn_client.start_execution(
             stateMachineArn=sm_arn,

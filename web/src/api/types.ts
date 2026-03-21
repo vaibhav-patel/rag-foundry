@@ -84,7 +84,7 @@ export interface paths {
             };
             requestBody?: {
                 content: {
-                    "application/json": components["schemas"]["KnowledgeBaseCreate"];
+                    "application/json": components["schemas"]["knowledge-base-mutation.schema"];
                 };
             };
             responses: {
@@ -94,6 +94,15 @@ export interface paths {
                         [name: string]: unknown;
                     };
                     content?: never;
+                };
+                /** @description Invalid JSON, non-object body, or JSON Schema validation failure */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["BadRequestInvalidJson"] | components["schemas"]["BadRequestSchemaValidation"];
+                    };
                 };
                 /** @description Per-tenant daily API request quota exceeded (UTC day) */
                 429: {
@@ -110,6 +119,127 @@ export interface paths {
         options?: never;
         head?: never;
         patch?: never;
+        trace?: never;
+    };
+    "/v1/kbs/{kbId}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                kbId: string;
+            };
+            cookie?: never;
+        };
+        /** Get knowledge base */
+        get: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    kbId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Current KB configuration */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["KnowledgeBase"];
+                    };
+                };
+                /** @description Tenant mismatch */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description KB not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Per-tenant daily API request quota exceeded (UTC day) */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["DailyQuotaExceeded"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        /** Update knowledge base */
+        patch: {
+            parameters: {
+                query?: never;
+                header?: never;
+                path: {
+                    kbId: string;
+                };
+                cookie?: never;
+            };
+            requestBody: {
+                content: {
+                    "application/json": components["schemas"]["knowledge-base-mutation.schema"];
+                };
+            };
+            responses: {
+                /** @description Updated KB */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["KnowledgeBase"];
+                    };
+                };
+                /** @description Invalid JSON, non-object body, empty PATCH, or JSON Schema validation failure */
+                400: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["BadRequestInvalidJson"] | components["schemas"]["BadRequestSchemaValidation"];
+                    };
+                };
+                /** @description Tenant mismatch */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description KB not found */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Per-tenant daily API request quota exceeded (UTC day) */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["DailyQuotaExceeded"];
+                    };
+                };
+            };
+        };
         trace?: never;
     };
     "/v1/kbs/{kbId}/query": {
@@ -504,19 +634,21 @@ export interface components {
             quota_date: string;
             limit: number;
         };
-        KnowledgeBaseCreate: {
-            name?: string;
-            /** @description Default embedding model stored on the KB record */
-            embedding_model_id?: string;
-            /** @description Optional default Bedrock guardrail identifier for `/v1/kbs/{kbId}/query` when the request does not specify guardrail fields (`guardrails_*` / `guardrailIdentifier`)
-             *      */
-            bedrock_guardrail_id?: string;
-            /** @description Guardrail version; stored when `bedrock_guardrail_id` is set */
-            bedrock_guardrail_version?: string;
-            /** @description Alias for `bedrock_guardrail_id` */
-            guardrailIdentifier?: string;
-            /** @description Alias for `bedrock_guardrail_version` */
-            guardrailVersion?: string;
+        KnowledgeBaseCreate: components["schemas"]["knowledge-base-mutation.schema"];
+        KnowledgeBasePatch: components["schemas"]["knowledge-base-mutation.schema"];
+        /** @description KB row returned by GET /v1/kbs/{kbId} and PATCH (optional keys omitted when unset) */
+        KnowledgeBase: {
+            id: string;
+            name: string;
+            embedding_model_id: string;
+            /** @description Default chunk size for ingest jobs when the job body omits chunk_chars */
+            chunk_chars?: number | null;
+            /** @description Optional default hybrid search flag for dense search / RAG (stored for future use) */
+            hybrid?: boolean | null;
+            /** @description Optional default Bedrock text model id for RAG generation on this KB */
+            generation_model_id?: string | null;
+            bedrock_guardrail_id?: string | null;
+            bedrock_guardrail_version?: string | null;
         };
         JobStatus: components["schemas"]["job-status.schema"];
         /** @description Single chunk hit from OpenSearch `_source` */
@@ -628,6 +760,18 @@ export interface components {
              */
             status: "QUEUED";
             s3_key?: string;
+        };
+        /** KnowledgeBaseMutation */
+        "knowledge-base-mutation.schema": {
+            name?: string;
+            embedding_model_id?: string;
+            chunk_chars?: number;
+            hybrid?: boolean;
+            generation_model_id?: string;
+            bedrock_guardrail_id?: string;
+            bedrock_guardrail_version?: string;
+            guardrailIdentifier?: string;
+            guardrailVersion?: string;
         };
         /**
          * JobStatus

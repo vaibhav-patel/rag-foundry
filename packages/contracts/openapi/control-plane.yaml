@@ -34,6 +34,75 @@ paths:
       responses:
         "201":
           description: KB created
+        "400":
+          description: Invalid JSON, non-object body, or JSON Schema validation failure
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/BadRequestInvalidJson"
+                  - $ref: "#/components/schemas/BadRequestSchemaValidation"
+        "429":
+          description: Per-tenant daily API request quota exceeded (UTC day)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DailyQuotaExceeded"
+  /v1/kbs/{kbId}:
+    parameters:
+      - name: kbId
+        in: path
+        required: true
+        schema:
+          type: string
+    get:
+      summary: Get knowledge base
+      security: [{ bearerAuth: [] }]
+      responses:
+        "200":
+          description: Current KB configuration
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KnowledgeBase"
+        "403":
+          description: Tenant mismatch
+        "404":
+          description: KB not found
+        "429":
+          description: Per-tenant daily API request quota exceeded (UTC day)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DailyQuotaExceeded"
+    patch:
+      summary: Update knowledge base
+      security: [{ bearerAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/KnowledgeBasePatch"
+      responses:
+        "200":
+          description: Updated KB
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/KnowledgeBase"
+        "400":
+          description: Invalid JSON, non-object body, empty PATCH, or JSON Schema validation failure
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/BadRequestInvalidJson"
+                  - $ref: "#/components/schemas/BadRequestSchemaValidation"
+        "403":
+          description: Tenant mismatch
+        "404":
+          description: KB not found
         "429":
           description: Per-tenant daily API request quota exceeded (UTC day)
           content:
@@ -282,27 +351,38 @@ components:
           type: integer
           minimum: 1
     KnowledgeBaseCreate:
+      $ref: "../schemas/knowledge-base-mutation.schema.json"
+    KnowledgeBasePatch:
+      $ref: "../schemas/knowledge-base-mutation.schema.json"
+    KnowledgeBase:
       type: object
+      description: KB row returned by GET /v1/kbs/{kbId} and PATCH (optional keys omitted when unset)
+      required: [id, name, embedding_model_id]
       properties:
+        id:
+          type: string
         name:
           type: string
         embedding_model_id:
           type: string
-          description: Default embedding model stored on the KB record
+        chunk_chars:
+          type: integer
+          nullable: true
+          description: Default chunk size for ingest jobs when the job body omits chunk_chars
+        hybrid:
+          type: boolean
+          nullable: true
+          description: Optional default hybrid search flag for dense search / RAG (stored for future use)
+        generation_model_id:
+          type: string
+          nullable: true
+          description: Optional default Bedrock text model id for RAG generation on this KB
         bedrock_guardrail_id:
           type: string
-          description: >
-            Optional default Bedrock guardrail identifier for `/v1/kbs/{kbId}/query` when the
-            request does not specify guardrail fields (`guardrails_*` / `guardrailIdentifier`)
+          nullable: true
         bedrock_guardrail_version:
           type: string
-          description: Guardrail version; stored when `bedrock_guardrail_id` is set
-        guardrailIdentifier:
-          type: string
-          description: Alias for `bedrock_guardrail_id`
-        guardrailVersion:
-          type: string
-          description: Alias for `bedrock_guardrail_version`
+          nullable: true
     JobStatus:
       $ref: "../schemas/job-status.schema.json"
     DenseSearchHit:
