@@ -1,4 +1,10 @@
-import type { KnowledgeBase, KnowledgeBaseMutation, StartIngestJobBody } from "./api/payloads";
+import type {
+  IngestManifestPresignResponse,
+  JobPollResponse,
+  KnowledgeBase,
+  KnowledgeBaseMutation,
+  StartIngestJobBody,
+} from "./api/payloads";
 
 const base = import.meta.env.VITE_API_URL ?? "";
 const token = import.meta.env.VITE_JWT_TOKEN ?? "";
@@ -96,6 +102,33 @@ export async function patchKnowledgeBaseApi(
     body: JSON.stringify(body),
   });
   return readJsonResponse<KnowledgeBase>(r);
+}
+
+export function jobPollUrl(jobId: string, kbId?: string): string {
+  const q = kbId?.trim()
+    ? `?kb_id=${encodeURIComponent(kbId.trim())}`
+    : "";
+  return `${base}/v1/jobs/${encodeURIComponent(jobId)}${q}`;
+}
+
+export function jobManifestUrl(jobId: string, kbId?: string): string {
+  const q = kbId?.trim()
+    ? `?kb_id=${encodeURIComponent(kbId.trim())}`
+    : "";
+  return `${base}/v1/jobs/${encodeURIComponent(jobId)}/manifest${q}`;
+}
+
+export async function fetchJobPoll(jobId: string, kbId?: string): Promise<JobPollResponse> {
+  const r = await fetch(jobPollUrl(jobId, kbId), { headers: authHeaders() });
+  return readJsonResponse<JobPollResponse>(r);
+}
+
+export async function fetchJobManifestPresign(
+  jobId: string,
+  kbId?: string,
+): Promise<IngestManifestPresignResponse> {
+  const r = await fetch(jobManifestUrl(jobId, kbId), { headers: authHeaders() });
+  return readJsonResponse<IngestManifestPresignResponse>(r);
 }
 
 export async function startIngestJobApi(kbId: string, body: StartIngestJobBody): Promise<unknown> {

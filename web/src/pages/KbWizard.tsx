@@ -11,7 +11,7 @@ import {
 import type { KnowledgeBase, KnowledgeBaseMutation } from "../api/payloads";
 import { validateKbMutation, validateKbPatch } from "../api/kb-mutation-validate";
 import type { StartIngestJobBody } from "../api/payloads";
-import { JobTimeline } from "../components/JobTimeline";
+import { JobTimeline, type TimelineJobRef } from "../components/JobTimeline";
 
 const api = import.meta.env.VITE_API_URL ?? "";
 const token = import.meta.env.VITE_JWT_TOKEN ?? "";
@@ -202,6 +202,7 @@ export function KbWizard() {
   const [s3Key, setS3Key] = useState("");
   const [jobEmbeddingId, setJobEmbeddingId] = useState("");
   const [chunkChars, setChunkChars] = useState("");
+  const [timelineJobs, setTimelineJobs] = useState<TimelineJobRef[]>([]);
 
   const setCreate = useCallback((p: Partial<KbFormFields>) => {
     setCreateForm((s) => ({ ...s, ...p }));
@@ -431,16 +432,30 @@ export function KbWizard() {
               type="button"
               className="rounded bg-slate-600 px-3 py-2 text-sm text-white hover:bg-slate-500 disabled:opacity-40"
               disabled={jobMut.isPending || !jobKbId.trim() || !s3Key.trim()}
-              onClick={() =>
-                jobMut.mutate({
-                  kbId: jobKbId.trim(),
-                  body: {
-                    s3_key: s3Key.trim(),
-                    embedding_model_id: jobEmbeddingId.trim() || undefined,
-                    chunk_chars: chunkChars.trim() ? Number(chunkChars) : undefined,
+              onClick={() => {
+                const kb = jobKbId.trim();
+                jobMut.mutate(
+                  {
+                    kbId: kb,
+                    body: {
+                      s3_key: s3Key.trim(),
+                      embedding_model_id: jobEmbeddingId.trim() || undefined,
+                      chunk_chars: chunkChars.trim() ? Number(chunkChars) : undefined,
+                    },
                   },
-                })
-              }
+                  {
+                    onSuccess: (raw) => {
+                      const nid = (raw as { id?: string }).id;
+                      if (typeof nid !== "string") return;
+                      const kbTracked = kb || undefined;
+                      setTimelineJobs((prev) => [
+                        ...prev.filter((j) => !(j.jobId === nid && j.kbId === kbTracked)),
+                        { jobId: nid, kbId: kbTracked },
+                      ]);
+                    },
+                  },
+                );
+              }}
             >
               POST /v1/kbs/…/jobs
             </button>
@@ -455,8 +470,15 @@ export function KbWizard() {
       )}
 
       <section>
-        <h2 className="text-sm font-medium text-slate-300 mb-2">Ingest job</h2>
-        <JobTimeline />
+        <h2 className="text-sm font-medium text-slate-300 mb-2">Ingest job timeline</h2>
+        <p className="text-xs text-slate-500 mb-3">
+          Live polling uses exponential backoff capped at ~30s. Jobs you start above are tracked
+          automatically.
+        </p>
+        <JobTimeline
+          jobs={timelineJobs}
+          onRemoveJob={(id) => setTimelineJobs((p) => p.filter((j) => j.jobId !== id))}
+        />
       </section>
     </div>
   );

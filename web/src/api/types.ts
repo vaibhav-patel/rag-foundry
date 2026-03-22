@@ -579,6 +579,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/jobs/{jobId}/manifest": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Presigned GET URL for ingest manifest (S3 object under RAW_BUCKET / derived prefix) */
+        get: {
+            parameters: {
+                query?: {
+                    /** @description Same as GET /v1/jobs/{jobId} — recommended when known */
+                    kb_id?: string;
+                };
+                header?: never;
+                path: {
+                    jobId: string;
+                };
+                cookie?: never;
+            };
+            requestBody?: never;
+            responses: {
+                /** @description Short-lived HTTPS URL for manifest.json */
+                200: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["IngestManifestPresignResponse"];
+                    };
+                };
+                /** @description Tenant mismatch / invalid job */
+                403: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Job missing or manifest_key not yet set */
+                404: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content?: never;
+                };
+                /** @description Per-tenant daily API request quota exceeded (UTC day) */
+                429: {
+                    headers: {
+                        [name: string]: unknown;
+                    };
+                    content: {
+                        "application/json": components["schemas"]["DailyQuotaExceeded"];
+                    };
+                };
+            };
+        };
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/plugins/manifest": {
         parameters: {
             query?: never;
@@ -751,6 +815,15 @@ export interface components {
             bulk_failed: number;
             /** @description OpenSearch bulk failure document `_id`s (subset may be persisted) */
             errors: string[];
+        };
+        /** @description Short-lived HTTPS URL to GET manifest JSON from the raw uploads bucket (same bucket as ingest inputs; key under derived/…) */
+        IngestManifestPresignResponse: {
+            /** Format: uri */
+            manifest_url: string;
+            /** @description Presigned URL lifetime in seconds */
+            expires_in: number;
+            /** @description S3 object key passed to get_object */
+            manifest_key: string;
         };
         IngestJobCreated: {
             id: string;

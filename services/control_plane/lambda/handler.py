@@ -94,6 +94,71 @@ def _tenant_id(claims: dict[str, str]) -> str:
     return claims.get("custom:tenant_id") or claims.get("sub", "unknown")
 
 
+def _job_kb_query_param(event: dict[str, Any]) -> str:
+    qs = event.get("queryStringParameters") or {}
+    if not isinstance(qs, dict):
+        return ""
+    return str(qs.get("kb_id") or qs.get("kbId") or "").strip()
+
+
+def _resolve_ingest_job_item(
+    *,
+    table: str,
+    tenant: str,
+    job_id: str,
+    kb_q: str,
+) -> tuple[dict[str, Any] | None, int | None, dict[str, Any] | None]:
+    """Load tenant-scoped ingest job row. Success ``(item, None, None)`` or ``(None, status, err_body)``."""
+
+    if kb_q:
+        keyed = ddb_client.get_item(
+            TableName=table,
+            Key={"PK": {"S": f"KB#{kb_q}"}, "SK": {"S": f"JOB#{job_id}"}},
+        )
+        if "Item" not in keyed:
+            return None, 404, {"title": "Not found", "detail": "Job not found"}
+        itq = keyed["Item"]
+        if itq.get("tenant", {}).get("S") != tenant:
+            return None, 403, {"title": "Forbidden", "detail": "Invalid job"}
+        stored_kb = itq.get("kb_id", {}).get("S")
+        if stored_kb not in (None, "") and stored_kb != kb_q:
+            return None, 403, {"title": "Forbidden", "detail": "kb_id mismatch"}
+        return itq, None, None
+
+    qry = ddb_client.query(
+        TableName=table,
+        IndexName="GSI1",
+        KeyConditionExpression="GSI1PK = :pk AND GSI1SK = :sk",
+        ExpressionAttributeValues={
+            ":pk": {"S": JOB_GSI1_PARTITION_PK},
+            ":sk": {"S": gsi_sort_key_for_tenant_job(tenant=tenant, job_id=job_id)},
+        },
+    )
+    items = qry.get("Items") or []
+    picked: dict[str, Any] | None = None
+    for it in items:
+        if it["SK"]["S"] == f"JOB#{job_id}" and it.get("tenant", {}).get("S") == tenant:
+            picked = it
+            break
+    if not picked and items:
+        q2 = ddb_client.query(
+            TableName=table,
+            IndexName="GSI1",
+            KeyConditionExpression="GSI1PK = :pk AND begins_with(GSI1SK, :sk)",
+            ExpressionAttributeValues={
+                ":pk": {"S": JOB_GSI1_PARTITION_PK},
+                ":sk": {"S": f"TENANT#{tenant}#"},
+            },
+        )
+        for it in q2.get("Items", []) or []:
+            if it["SK"]["S"] == f"JOB#{job_id}" and it.get("tenant", {}).get("S") == tenant:
+                picked = it
+                break
+    if picked:
+        return picked, None, None
+    return None, 404, {"title": "Not found", "detail": "Job not found"}
+
+
 def _kb_item_to_json(it: dict[str, Any], kb_id: str) -> dict[str, Any]:
     """Project a DynamoDB KB item to the control-plane JSON shape."""
 
@@ -425,61 +490,49 @@ def handler(event: dict[str, Any], context: Any) -> dict[str, Any]:
             return _json_response(403, {"title": "Forbidden", "detail": "Invalid job"})
         return _json_response(200, job_item_to_api_body(job_id_kb, itj))
 
+    m_job_manifest = re.fullmatch(r"/v1/jobs/([^/]+)/manifest", path)
+    if m_job_manifest and method == "GET":
+        job_mid = m_job_manifest.group(1)
+        kb_m = _job_kb_query_param(event)
+        item_m, st_m, body_m = _resolve_ingest_job_item(
+            table=table, tenant=tenant, job_id=job_mid, kb_q=kb_m
+        )
+        if st_m is not None:
+            return _json_response(st_m, body_m or {})
+        mk = str(item_m.get("manifest_key", {}).get("S") or "").strip()
+        if not mk:
+            return _json_response(
+                404,
+                {
+                    "title": "Not found",
+                    "detail": "Manifest not yet available for this job",
+                },
+            )
+        ttl = max(60, min(900, int(os.environ.get("MANIFEST_PRESIGN_TTL_SECONDS", "300"))))
+        manifest_url = s3_client.generate_presigned_url(
+            ClientMethod="get_object",
+            Params={"Bucket": raw_bucket, "Key": mk},
+            ExpiresIn=ttl,
+        )
+        return _json_response(
+            200,
+            {
+                "manifest_url": manifest_url,
+                "expires_in": ttl,
+                "manifest_key": mk,
+            },
+        )
+
     m_job = re.fullmatch(r"/v1/jobs/([^/]+)", path)
     if m_job and method == "GET":
         job_id = m_job.group(1)
-        qs_param = event.get("queryStringParameters") or {}
-        kb_q = ""
-        if isinstance(qs_param, dict):
-            kb_q = str(qs_param.get("kb_id") or qs_param.get("kbId") or "").strip()
-        if kb_q:
-            keyed = ddb_client.get_item(
-                TableName=table,
-                Key={"PK": {"S": f"KB#{kb_q}"}, "SK": {"S": f"JOB#{job_id}"}},
-            )
-            if "Item" not in keyed:
-                return _json_response(404, {"title": "Not found", "detail": "Job not found"})
-            itq = keyed["Item"]
-            if itq.get("tenant", {}).get("S") != tenant:
-                return _json_response(403, {"title": "Forbidden", "detail": "Invalid job"})
-            stored_kb = itq.get("kb_id", {}).get("S")
-            if stored_kb not in (None, "") and stored_kb != kb_q:
-                return _json_response(403, {"title": "Forbidden", "detail": "kb_id mismatch"})
-            return _json_response(200, job_item_to_api_body(job_id, itq))
-
-        q = ddb_client.query(
-            TableName=table,
-            IndexName="GSI1",
-            KeyConditionExpression="GSI1PK = :pk AND GSI1SK = :sk",
-            ExpressionAttributeValues={
-                ":pk": {"S": JOB_GSI1_PARTITION_PK},
-                ":sk": {"S": gsi_sort_key_for_tenant_job(tenant=tenant, job_id=job_id)},
-            },
+        kb_q = _job_kb_query_param(event)
+        itj, st_j, body_j = _resolve_ingest_job_item(
+            table=table, tenant=tenant, job_id=job_id, kb_q=kb_q
         )
-        items = q.get("Items") or []
-        picked: dict[str, Any] | None = None
-        for it in items:
-            if it["SK"]["S"] == f"JOB#{job_id}" and it.get("tenant", {}).get("S") == tenant:
-                picked = it
-                break
-        if not picked and items:
-            # Legacy safety: malformed GSI1SK — fall back to prefix scan (migration / bad rows).
-            q2 = ddb_client.query(
-                TableName=table,
-                IndexName="GSI1",
-                KeyConditionExpression="GSI1PK = :pk AND begins_with(GSI1SK, :sk)",
-                ExpressionAttributeValues={
-                    ":pk": {"S": JOB_GSI1_PARTITION_PK},
-                    ":sk": {"S": f"TENANT#{tenant}#"},
-                },
-            )
-            for it in q2.get("Items", []) or []:
-                if it["SK"]["S"] == f"JOB#{job_id}" and it.get("tenant", {}).get("S") == tenant:
-                    picked = it
-                    break
-        if picked:
-            return _json_response(200, job_item_to_api_body(job_id, picked))
-        return _json_response(404, {"title": "Not found", "detail": "Job not found"})
+        if st_j is not None:
+            return _json_response(st_j, body_j or {})
+        return _json_response(200, job_item_to_api_body(job_id, itj))
 
     m_search = re.fullmatch(r"/v1/kbs/([^/]+)/search", path)
     if m_search and method == "POST":

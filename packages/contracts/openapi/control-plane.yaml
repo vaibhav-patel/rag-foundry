@@ -296,6 +296,39 @@ paths:
                   $ref: "#/components/examples/jobPollPartial"
         "404":
           description: Job missing
+  /v1/jobs/{jobId}/manifest:
+    get:
+      summary: Presigned GET URL for ingest manifest (S3 object under RAW_BUCKET / derived prefix)
+      security: [{ bearerAuth: [] }]
+      parameters:
+        - name: jobId
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: kb_id
+          in: query
+          required: false
+          description: Same as GET /v1/jobs/{jobId} — recommended when known
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Short-lived HTTPS URL for manifest.json
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IngestManifestPresignResponse"
+        "403":
+          description: Tenant mismatch / invalid job
+        "404":
+          description: Job missing or manifest_key not yet set
+        "429":
+          description: Per-tenant daily API request quota exceeded (UTC day)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DailyQuotaExceeded"
   /v1/plugins/manifest:
     post:
       summary: Register plugin manifest
@@ -570,6 +603,21 @@ components:
           description: OpenSearch bulk failure document `_id`s (subset may be persisted)
           items:
             type: string
+    IngestManifestPresignResponse:
+      type: object
+      description: Short-lived HTTPS URL to GET manifest JSON from the raw uploads bucket (same bucket as ingest inputs; key under derived/…)
+      required: [manifest_url, expires_in, manifest_key]
+      properties:
+        manifest_url:
+          type: string
+          format: uri
+        expires_in:
+          type: integer
+          minimum: 1
+          description: Presigned URL lifetime in seconds
+        manifest_key:
+          type: string
+          description: S3 object key passed to get_object
     IngestJobCreated:
       type: object
       required: [id, status]
