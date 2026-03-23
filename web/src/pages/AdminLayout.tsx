@@ -12,7 +12,7 @@ export function AdminLayout() {
           Playground
         </Link>
       </header>
-      <main className="p-6 max-w-3xl">
+      <main className="p-6 max-w-5xl">
         <Outlet />
       </main>
     </div>

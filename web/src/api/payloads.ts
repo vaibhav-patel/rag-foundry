@@ -9,6 +9,7 @@ export type IngestManifestPresignResponse = components["schemas"]["IngestManifes
 export type DenseSearchRequest = components["schemas"]["DenseSearchRequest"];
 export type RagQueryRequest = components["schemas"]["RagQueryRequest"];
 export type DenseSearchResponse = components["schemas"]["DenseSearchResponse"];
+export type DenseSearchHit = components["schemas"]["DenseSearchHit"];
 export type RagQueryResponse = components["schemas"]["RagQueryResponse"];
 
 export type StartIngestJobBody = NonNullable<

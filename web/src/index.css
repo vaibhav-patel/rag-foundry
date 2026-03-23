@@ -5,3 +5,7 @@
 body {
   @apply bg-slate-950 text-slate-100 antialiased;
 }
+
+mark {
+  @apply rounded-sm px-0.5 bg-amber-400/30 text-inherit ring-1 ring-amber-400/20;
+}

@@ -1,6 +1,7 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { authHeaders, fetchKnowledgeBaseList, type KnowledgeBaseListJson } from "../api";
+import { SearchResultsPanel } from "../components/SearchResultsPanel";
 import { denseSearchBody, ragQueryBody, type DenseSearchResponse, type RagQueryResponse } from "../api/payloads";
 
 const api = import.meta.env.VITE_API_URL ?? "";
@@ -33,6 +34,7 @@ async function queryKb(kbId: string, body: ReturnType<typeof ragQueryBody>): Pro
 }
 
 export function Playground() {
+  const questionRef = useRef<HTMLInputElement>(null);
   const [kbId, setKbId] = useState("");
   const [q, setQ] = useState("hello");
   const [question, setQuestion] = useState("What is this KB about?");
@@ -48,6 +50,22 @@ export function Playground() {
     mutationFn: () => queryKb(kbId, ragQueryBody(question)),
   });
 
+  const searchPanelStatus = searchMut.isPending
+    ? "pending"
+    : searchMut.isError
+      ? "error"
+      : searchMut.isSuccess
+        ? "success"
+        : "idle";
+
+  const onSendToQuery = (snippet: string) => {
+    setQuestion(snippet);
+    queueMicrotask(() => {
+      questionRef.current?.focus();
+      questionRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+    });
+  };
+
   if (!api || !token) {
     return (
       <div className="text-slate-400 text-sm">
@@ -58,7 +76,7 @@ export function Playground() {
   }
 
   return (
-    <div className="space-y-6 max-w-xl">
+    <div className="space-y-6 max-w-4xl">
       <h1 className="text-xl font-medium">Search playground</h1>
       <label className="block text-sm text-slate-400">
         KB id
@@ -102,20 +120,35 @@ export function Playground() {
       <label className="block text-sm text-slate-400">
         Question
         <input
+          ref={questionRef}
           className="mt-1 block w-full rounded border border-slate-700 bg-slate-900 px-3 py-2"
           value={question}
           onChange={(e) => setQuestion(e.target.value)}
         />
       </label>
-      <pre className="rounded-lg bg-slate-900 p-3 text-xs overflow-auto text-slate-300">
-        {searchMut.isPending || queryMut.isPending
-          ? "Loading…"
-          : JSON.stringify(
-              { search: searchMut.data ?? null, query: queryMut.data ?? null },
-              null,
-              2,
-            )}
-      </pre>
+
+      <SearchResultsPanel
+        hits={searchMut.data?.hits ?? []}
+        query={q}
+        status={searchPanelStatus}
+        total={searchMut.data?.total ?? null}
+        backend={searchMut.data?.backend ?? null}
+        errorMessage={searchMut.error ? String(searchMut.error) : null}
+        onSendToQuery={onSendToQuery}
+      />
+
+      <details className="rounded-lg border border-slate-800 bg-slate-900/30 p-3 text-xs">
+        <summary className="cursor-pointer text-slate-400 select-none">Raw API JSON</summary>
+        <pre className="mt-2 overflow-auto text-slate-300 max-h-64">
+          {searchMut.isPending || queryMut.isPending
+            ? "Loading…"
+            : JSON.stringify(
+                { search: searchMut.data ?? null, query: queryMut.data ?? null },
+                null,
+                2,
+              )}
+        </pre>
+      </details>
     </div>
   );
 }
