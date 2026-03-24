@@ -1,8 +1,10 @@
 import { useMutation, useQuery } from "@tanstack/react-query";
 import { useRef, useState } from "react";
 import { authHeaders, fetchKnowledgeBaseList, type KnowledgeBaseListJson } from "../api";
+import { denseSearchBody, ragQueryBody, type DenseSearchResponse } from "../api/payloads";
+import { QueryAnswerSection } from "../components/QueryAnswerSection";
 import { SearchResultsPanel } from "../components/SearchResultsPanel";
-import { denseSearchBody, ragQueryBody, type DenseSearchResponse, type RagQueryResponse } from "../api/payloads";
+import { useRagQueryPlayback } from "../hooks/useRagQueryPlayback";
 
 const api = import.meta.env.VITE_API_URL ?? "";
 const token = import.meta.env.VITE_JWT_TOKEN ?? "";
@@ -20,19 +22,6 @@ async function searchKb(kbId: string, body: ReturnType<typeof denseSearchBody>):
   return r.json();
 }
 
-async function queryKb(kbId: string, body: ReturnType<typeof ragQueryBody>): Promise<RagQueryResponse> {
-  const r = await fetch(`${api}/v1/kbs/${kbId}/query`, {
-    method: "POST",
-    headers: {
-      ...authHeaders(),
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(body),
-  });
-  if (!r.ok) throw new Error(`query ${r.status}`);
-  return r.json();
-}
-
 export function Playground() {
   const questionRef = useRef<HTMLInputElement>(null);
   const [kbId, setKbId] = useState("");
@@ -46,8 +35,12 @@ export function Playground() {
   const searchMut = useMutation({
     mutationFn: () => searchKb(kbId, denseSearchBody({ q, k: 5 })),
   });
-  const queryMut = useMutation({
-    mutationFn: () => queryKb(kbId, ragQueryBody(question)),
+
+  const ragPlayback = useRagQueryPlayback({
+    apiBaseUrl: api,
+    kbId,
+    question,
+    authHeaders,
   });
 
   const searchPanelStatus = searchMut.isPending
@@ -65,6 +58,9 @@ export function Playground() {
       questionRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
     });
   };
+
+  const canQuery = Boolean(kbId.trim()) && Boolean(question.trim());
+  const rawJsonBusy = searchMut.isPending || ragPlayback.phase === "fetching";
 
   if (!api || !token) {
     return (
@@ -102,9 +98,10 @@ export function Playground() {
         </button>
         <button
           type="button"
-          className="rounded bg-slate-700 px-3 py-2 text-sm text-white hover:bg-slate-600"
-          onClick={() => queryMut.mutate()}
-          disabled={!kbId}
+          className="rounded bg-slate-700 px-3 py-2 text-sm text-white hover:bg-slate-600 disabled:opacity-45"
+          onClick={() => ragPlayback.runQuery()}
+          disabled={!canQuery}
+          title={!canQuery ? "Provide KB id and a non-empty question" : undefined}
         >
           RAG query
         </button>
@@ -137,13 +134,19 @@ export function Playground() {
         onSendToQuery={onSendToQuery}
       />
 
+      <QueryAnswerSection playback={ragPlayback} />
+
       <details className="rounded-lg border border-slate-800 bg-slate-900/30 p-3 text-xs">
         <summary className="cursor-pointer text-slate-400 select-none">Raw API JSON</summary>
         <pre className="mt-2 overflow-auto text-slate-300 max-h-64">
-          {searchMut.isPending || queryMut.isPending
+          {rawJsonBusy
             ? "Loading…"
             : JSON.stringify(
-                { search: searchMut.data ?? null, query: queryMut.data ?? null },
+                {
+                  search: searchMut.data ?? null,
+                  ragQuery: ragQueryBody(question.trim() || "(empty)"),
+                  ragAnswer: ragPlayback.fullResponse ?? null,
+                },
                 null,
                 2,
               )}
