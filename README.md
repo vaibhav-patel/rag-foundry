@@ -37,6 +37,30 @@ make lint test
 cd infra && cdk synth
 ```
 
+## Operator CLI (`rag-foundry`)
+
+The Typer app in `cli/` talks to the control plane via **`ControlPlaneClient`** from `packages/sdk-python` (`stdlib` urllib only).
+
+| Env | Meaning |
+|-----|---------|
+| `RAG_FOUNDRY_API_URL` | Control plane base URL (no trailing slash required) |
+| `RAG_FOUNDRY_TOKEN` | Bearer JWT for tenant-scoped routes (`kb-list`, `search`, `query`, …) |
+
+Put **`--json` immediately after the program name** for compact JSON (CI / smoke piping); omit it for pretty-printed JSON.
+
+```bash
+# Health (no auth)
+rag-foundry --json health | jq .
+
+# Dense search + RAG query (JWT required); compact output for assertions
+rag-foundry --json search "$KB_ID" "release engineering" --k 10
+rag-foundry --json query "$KB_ID" "Summarize ingestion limits." 
+
+# Inspect flags (completion stub until we ship a formal installer): 
+rag-foundry search --help
+rag-foundry query --help
+```
+
 ## License
 
 Apache-2.0 — see [LICENSE](LICENSE).

@@ -9,5 +9,6 @@ pip install -U pip ruff pytest
 pip install -e "infra/[dev]"
 pip install -e "services/control_plane/[dev]"
 pip install -e "packages/contracts"
+pip install -e "packages/sdk-python"
 pip install -e "cli/[dev]"
 echo "Bootstrap complete. Activate: source .venv/bin/activate"

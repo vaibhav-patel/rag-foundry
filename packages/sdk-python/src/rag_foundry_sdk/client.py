@@ -54,3 +54,18 @@ class ControlPlaneClient:
     def create_job(self, kb_id: str, s3_key: str, **extra: Any) -> Any:
         payload: dict[str, Any] = {"s3_key": s3_key, **extra}
         return self._request("POST", f"/v1/kbs/{kb_id}/jobs", body=payload)
+
+    def search(self, kb_id: str, body: dict[str, Any] | None = None) -> Any:
+        """POST ``/v1/kbs/{kbId}/search`` — dense / hybrid retrieval (stub or live OpenSearch).
+
+        Omit ``body`` or pass ``{}`` to accept API defaults after schema merge.
+        """
+        return self._request(
+            "POST",
+            f"/v1/kbs/{kb_id}/search",
+            body=body if body is not None else {},
+        )
+
+    def query(self, kb_id: str, body: dict[str, Any]) -> Any:
+        """POST ``/v1/kbs/{kbId}/query`` — retrieval + bounded context + Bedrock generation."""
+        return self._request("POST", f"/v1/kbs/{kb_id}/query", body=body)

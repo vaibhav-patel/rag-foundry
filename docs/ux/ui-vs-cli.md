@@ -7,3 +7,5 @@
 | Product integrations | **HTTP API** directly |
 
 Both UI and CLI call the same control-plane API. Machine-to-machine auth should use scoped credentials (ADR in `docs/adr/`).
+
+The CLI exposes `search` and `query` with a shared **`--json`** flag (see root `README.md`); shell completions are intentionally left as **`--help` documentation** until a bundled completion installer lands.
