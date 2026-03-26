@@ -7,6 +7,13 @@ from typing import Any
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+from rag_foundry_sdk.types import (
+    DenseSearchResponse,
+    RagQueryResponse,
+    dense_search_response_from_json,
+    rag_query_response_from_json,
+)
+
 
 class ControlPlaneClient:
     """Call rag-foundry HTTP API (same paths as the web app / CLI)."""
@@ -69,3 +76,15 @@ class ControlPlaneClient:
     def query(self, kb_id: str, body: dict[str, Any]) -> Any:
         """POST ``/v1/kbs/{kbId}/query`` — retrieval + bounded context + Bedrock generation."""
         return self._request("POST", f"/v1/kbs/{kb_id}/query", body=body)
+
+    def search_kb(
+        self,
+        kb_id: str,
+        body: dict[str, Any] | None = None,
+    ) -> DenseSearchResponse:
+        """Same as ``search`` but coerces HTTP 200 JSON into ``DenseSearchResponse``."""
+        return dense_search_response_from_json(self.search(kb_id, body))
+
+    def query_kb(self, kb_id: str, body: dict[str, Any]) -> RagQueryResponse:
+        """Same as ``query`` but coerces HTTP 200 JSON into ``RagQueryResponse``."""
+        return rag_query_response_from_json(self.query(kb_id, body))

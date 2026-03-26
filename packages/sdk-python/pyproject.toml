@@ -1,8 +1,8 @@
 [project]
 name = "rag-foundry-sdk-python"
-version = "0.1.0"
+version = "0.2.0"
 requires-python = ">=3.9"
-description = "Thin helpers for plugin authors (stubs expanded later)."
+description = "Control-plane HTTP client and typed payloads for rag-foundry APIs."
 readme = "README.md"
 dependencies = []
 
