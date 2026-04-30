@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install tooling
+        run: pip install ruff pytest
+      - name: Ruff
+        run: ruff check services/control_plane infra cli packages/contracts scripts
+      - name: Format check
+        run: ruff format --check services/control_plane infra cli packages/contracts scripts
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install packages
+        run: |
+          pip install -e "infra/[dev]"
+          pip install -e "services/control_plane/[dev]"
+          pip install -e "packages/contracts"
+          pip install -e "cli/[dev]"
+      - name: Pytest
+        run: pytest -q
+
+  cdk-synth:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install CDK app
+        run: pip install -e "infra/[dev]"
+      - name: CDK synth
+        env:
+          CDK_DEFAULT_ACCOUNT: "000000000000"
+          CDK_DEFAULT_REGION: us-east-1
+        run: cd infra && cdk synth -q
